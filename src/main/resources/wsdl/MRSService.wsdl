@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions name="MRSDefinitions" 
+    targetNamespace="http://217.34.39.132:21/jspupload/upload/mrs.wsdl" 
+    xmlns:soap_snoop="http://ps.iona.com/artix/handlers/soap_snoop"     
+    xmlns="http://schemas.xmlsoap.org/wsdl/" 
+    xmlns:ns1="http://217.34.39.132:21/jspupload/upload/mrs.wsdl" 
+    xmlns:ns2="http://xml.apache.org/xml-soap" 
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" 
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"    
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <types>
+        <schema targetNamespace="http://xml.apache.org/xml-soap" 
+            xmlns="http://www.w3.org/2001/XMLSchema" 
+            xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/">
+            <complexType name="Map">
+                <sequence>
+                    <element maxOccurs="unbounded" minOccurs="0" name="item">
+                        <complexType>
+                            <sequence>
+                                <element name="key" type="xsd:anyType"/>
+                                <element name="value" type="xsd:anyType"/>
+                            </sequence>
+                        </complexType>
+                    </element>
+                </sequence>
+            </complexType>
+            <complexType name="Vector">
+                <sequence>
+                    <element maxOccurs="unbounded" minOccurs="0" name="item" type="xsd:anyType"/>
+                </sequence>
+            </complexType>
+        </schema>
+    </types>
+    <message name="getContent">
+        <part name="request" type="ns2:Map"/>
+    </message>
+    <message name="getContentResponse">
+        <part name="return" type="ns2:Map"/>
+    </message>
+    <portType name="MRSService">
+        <operation name="getContent">
+            <input message="ns1:getContent" name="getContent"/>
+            <output message="ns1:getContentResponse" name="getContentResponse"/>
+        </operation>
+    </portType>
+    <binding name="MRSService" type="ns1:MRSService">
+        <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+        <operation name="getContent">
+            <soap:operation soapAction="urn:ContentService"/>
+            <input>
+                <soap:body encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" 
+                    namespace="urn:ContentService" use="encoded"/>
+            </input>
+            <output>
+                <soap:body encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" 
+                    namespace="urn:ContentService" use="encoded"/>
+            </output>
+        </operation>
+    </binding>
+    <service name="MRSService">
+        <port binding="ns1:MRSService" name="SOAPOverHTTP">
+            <soap:address location="http://isisdev.cellnet.co.uk:7070"/>
+        </port>
+    </service>
+</definitions>

@@ -1,0 +1,605 @@
+
+package com.o2.manonsite.broker.wintel;
+ 
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream; 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.net.HttpURLConnection;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.net.UnknownHostException; 
+import java.util.Properties;
+import java.util.Random; 
+import com.o2.common.Configuration;
+import com.o2.common.Constants;
+
+import org.apache.log4j.Logger;
+
+import com.o2.manonsite.broker.BrokerConnection;
+import com.o2.manonsite.broker.BrokerException;
+import com.o2.manonsite.web.MosServlet;
+
+public class WintelBrokerConnection implements BrokerConnection 
+{	
+	public  static  final String MAXIM_SERVID="11";
+	private static  final String MAXIM_CostID="2";
+	private static  final String WINTEST_CostID="1";
+	private static  final String LONGCODE_CostID="3";
+	private static  final String WINTEST_SERVID="4";
+	private static  final int typeID=2;
+	public  static  final int WINTRANID_LIMIT = 10000000;
+	public  static  final String[][] ServiceDesp= {{"1","WIN Test Service","WINTEST"},{"4","ManOnsite","62946"},{"4","Osiris","62946"}};
+	private static  final int TEXTSIZE=160;
+	private static Logger log = Logger.getLogger(WintelBrokerConnection.class);
+	  
+	private static String username;
+	private static String password;	  	    
+	static final String testKeyword = "WINO2MANST";	 
+	public static final String SMSFAILED="SMS SEND FAILURE";
+	private static final int MAX_XML = 5; 
+	private static int maxRetry;
+	Properties systemProperties=System.getProperties();;   
+	static String proxyIP = "";
+	static int proxyPort = 80;
+	static boolean autoDetectProxy = false;  // If SSL version, assume autoDetect, else do not
+	static boolean useProxy = false;
+	public static Random generator =new Random();
+	private String urlStr;
+	public WintelBrokerConnection()
+	{
+		
+		WintelBrokerConnection.password = Configuration.getValue(Configuration.WINTEL_BROKER_PASSWORD);
+		WintelBrokerConnection.username = Configuration.getValue(Configuration.WINTEL_BROKER_USER); 
+		urlStr = Configuration.getValue(Configuration.MOS_SERVLET_URL);
+		log.debug("Url :" + urlStr);
+		WintelBrokerConnection.maxRetry = Integer.parseInt(Configuration.getValue(Configuration.MANONSITE_MAX_RETRY));
+		log.debug("Max Retry :" + WintelBrokerConnection.maxRetry);
+	}
+
+	public WintelBrokerConnection(String password, String username, String urlStr)
+	{
+		WintelBrokerConnection.password = password;
+		WintelBrokerConnection.username = username;
+		this.urlStr = urlStr; 
+		log.debug("Url :" + urlStr);
+	}
+
+	//connectProxyServer
+	//Initialises Global variable useProxy
+	Integer lockObj = new Integer(0);
+
+//	private int maxRetry=5;
+	void configureProxySettings()
+	{
+		/*synchronized(lockObj)
+		{	
+			//http.nonProxyHosts
+			if(Configuration.getValue(Configuration.MOS_PROXY_HOST) != null && Configuration.getValue(Configuration.MOS_PROXY_HOST).length() > 0)
+			{
+				systemProperties.setProperty("http.proxySet","true");
+				if(!systemProperties.containsKey("http.proxyHost") || 
+						systemProperties.getProperty("http.proxyHost").equals(Configuration.getValue(Configuration.MOS_PROXY_HOST_BACKUP)) )
+					systemProperties.setProperty("http.proxyHost",Configuration.getValue(Configuration.MOS_PROXY_HOST));
+				else
+					systemProperties.setProperty("http.proxyHost",Configuration.getValue(Configuration.MOS_PROXY_HOST_BACKUP));
+				systemProperties.setProperty("http.nonProxyHosts","localhost");
+				log.debug("HOST:"+ systemProperties.getProperty("http.proxyHost"));
+
+				if(Configuration.getValue(Configuration.MOS_PROXY_PORT) != null && Configuration.getValue(Configuration.MOS_PROXY_PORT).length() > 0)
+				{
+					systemProperties.setProperty("http.proxyPort",Configuration.getValue(Configuration.MOS_PROXY_PORT));
+					log.debug("PORT:"+ systemProperties.getProperty("http.proxyPort"));
+				} 
+			}
+		}*/
+	}
+
+	void detectProxy(URL sampleURL) {
+		String javaVers =systemProperties.getProperty("java.version");
+		log.debug("About to attempt auto proxy detection under Java version:"+javaVers);
+		boolean invokeFailover = false; // If specific, known detection methods fail may try fallback detection method
+
+		if (javaVers.startsWith("1.4"))  {
+			try {
+				//  Look around for the 1.4.X plugin proxy detection class... Without it, cannot autodetect...
+				Class t = Class.forName("com.sun.java.browser.net.ProxyService");
+				com.sun.java.browser.net.ProxyInfo[] pi = com.sun.java.browser.net.ProxyService.getProxyInfo(sampleURL);
+				if (pi == null || pi.length == 0) {
+					log.debug("1.4.X reported NULL proxy (no proxy assumed)");
+					useProxy = false;
+				}
+				else {
+					log.debug("1.4.X Proxy info geProxy:"+pi[0].getHost()+ " get Port:"+pi[0].getPort()+" isSocks:"+pi[0].isSocks());
+					useProxy = true;
+					proxyIP = pi[0].getHost();
+					proxyPort = pi[0].getPort();
+					log.debug("proxy " + proxyIP+" port " + proxyPort);
+				}
+			}
+			catch (Exception ee) {
+				log.debug("Sun Plugin 1.4.X proxy detection class not found, will try failover detection, e:"+ee);
+				invokeFailover = true;
+			}
+		}
+		else {
+			log.debug("Sun Plugin reported java version not 1.3.X or 1.4.X, trying failover detection...");
+			invokeFailover = true;
+		}
+		if (invokeFailover) {
+			log.debug("Using failover proxy detection...");
+			try {
+				String proxyList = ((String)System.getProperties().getProperty("javaplugin.proxy.config.list")).toUpperCase();
+				log.debug("Plugin Proxy Config List Property:"+proxyList);
+				useProxy = (proxyList != null);
+				if (useProxy) {     
+					//  Using HTTP proxy as proxy for HTTP proxy tunnelled SSL socket (should be listed FIRST)....
+					// 6.0.0 1/14/03 1.3.1_06 appears to omit HTTP portion of reported proxy list... Mod to accomodate this...
+					// Expecting proxyList of "HTTP=XXX.XXX.XXX.XXX:Port" OR "XXX.XXX.XXX.XXX:Port" & assuming HTTP...
+					if (proxyList.indexOf("HTTP=") > -1)
+						proxyIP = proxyList.substring(proxyList.indexOf("HTTP=")+5, proxyList.indexOf(":"));
+					else proxyIP = proxyList.substring(0, proxyList.indexOf(":"));
+					int endOfPort = proxyList.indexOf(",");
+					if (endOfPort < 1) endOfPort = proxyList.length();
+					proxyPort = Integer.parseInt(proxyList.substring(proxyList.indexOf(":")+1,endOfPort));
+					log.debug("proxy " + proxyIP+" port " + proxyPort);
+				}
+			}
+			catch (Exception e) {
+				System.out.println("Exception during failover auto proxy detection, autoDetect disabled, e:"+e);
+				autoDetectProxy = false;
+			}
+		}
+	}
+
+	/**
+	 * Establish and set up the URL connection
+	 *
+	 * @param theUrl java.lang.String = the POST URL
+	 * @return HttpURLConnection
+	 */
+	private HttpURLConnection getUrlConnection(String theUrl) {
+
+		//Create a URL connection 
+		java.net.HttpURLConnection conn = null;
+		java.net.URL conwayUrl;
+		try {		        		
+			conwayUrl = new java.net.URL(theUrl);  
+			conn = (HttpURLConnection) conwayUrl.openConnection();
+			//Setup connection parameters
+			conn.setRequestMethod("POST");
+			conn.setDoOutput(true);
+			conn.setDoInput(true);
+			conn.setUseCaches(false);
+		}
+		catch(java.net.UnknownHostException ue)
+		{
+			log.debug("Invalid Proxy Setting");
+		}
+		catch (IOException ioe) {
+			log.debug(ioe.getMessage());			
+		}
+
+
+		// Set the headers correctly (URL encoding, authentication) 
+		conn.setRequestProperty("Content-type", "application/x-www-form-urlencoded");		 
+		return conn;		
+	}
+	public String pingHttp(String host, int port) throws Exception 
+	{ 
+		PrintWriter output; 
+		InputStream input; 
+		StringBuffer response = new StringBuffer(); 
+		try 
+		{ 
+			if(port== -1)
+				port=80;
+			Socket httpSocket = new Socket(host, port); 
+			// Timeout after 5 seconds of trying to talk over socket. 
+			httpSocket.setSoTimeout(5000); 
+			output = new PrintWriter(httpSocket.getOutputStream(), false); 
+			input = httpSocket.getInputStream(); 
+			output.print("OPTIONS * HTTP/1.1\nHost: " + host + "\nUser-Agent: ManOnSite Diagnostics\r\n\r\n"); 
+			output.flush(); 
+
+			// Read maximum of 1k of data as we don't really care what this says. 
+			byte[] b = new byte[1024]; 
+			int n = input.read(b); 
+			response.append(new String(b, 0, n)); 
+			output.close(); 
+			input.close(); 
+			httpSocket.close(); 
+			log.debug("Response:" + response); 
+		} 
+		catch (UnknownHostException e) 
+		{ 
+			throw new Exception("Could not resolve the host \"" + host + "\"",e); 
+		} 
+		catch (SocketTimeoutException e) 
+		{ 
+			throw new Exception("The host \"" + host + "\" did not respond in a timely manner"); 
+		} 
+		catch (IOException e) 
+		{ 
+			throw new Exception("Could not connect to port " + port +" on \"" + host + "\"",e); 
+		} 
+		
+		return response.toString(); 
+	} 
+	private String sendQuery(String Qstr, HttpURLConnection conwayConn ) throws Exception
+	{		 
+		DataOutputStream myOutStream = null;
+		DataInputStream myInStream = null;
+		StringBuffer sb = new StringBuffer();
+		int statusCode = 0;
+		try {
+			//Set content Length
+			//log.debug("SMS Encoded Response Message :" + Qstr);
+			//log.debug("SMS LENGTH:" + (Integer.toString(Qstr.length())));
+			conwayConn.setRequestProperty( "Content-Length",(Integer.toString(Qstr.length()) ));
+			myOutStream = new DataOutputStream(new BufferedOutputStream(conwayConn.getOutputStream())); 
+			myOutStream.writeBytes(Qstr);
+			myOutStream.flush();
+			myOutStream.close();
+			//log.debug("myOutStream size:" + myOutStream.size());
+			// Test the URL Connection for success
+			statusCode = conwayConn.getResponseCode() ;
+			if (!conwayConn.getResponseMessage().equals("OK")) { 
+				String expStr = "Error" + "URL " + conwayConn.getURL().toExternalForm()  
+				+ ": " +conwayConn.getResponseMessage(); 
+				throw new BrokerException(expStr); 
+			}
+			else
+			{
+				myInStream = new DataInputStream(conwayConn.getInputStream()); 
+				//Get the response from the servlet page.
+				int ch;                
+				while ((ch = myInStream.read()) != -1) {
+					sb.append((char)ch);
+				}
+				myInStream.close();              
+			}
+		} 		 
+		catch(Exception e)
+		{				
+			if((statusCode== HttpURLConnection.HTTP_BAD_GATEWAY || 
+					statusCode == HttpURLConnection.HTTP_GATEWAY_TIMEOUT || 
+					statusCode == HttpURLConnection.HTTP_NOT_FOUND  
+			))
+			{
+				log.error("Server seems to be running; but O2 Proxy may be down: StatusCode:" + conwayConn.getResponseCode());
+				detectProxy(conwayConn.getURL());
+			}
+			else  
+			{
+				log.error("Some other kind of HTTP Error StatusCode:" + conwayConn.getResponseCode()); 
+			}	
+			throw new Exception(e);
+		}		 
+		return sb.toString();
+	}
+	
+		 
+	public String SendHttpRequest(String request) throws BrokerException
+	{
+		HttpURLConnection conwayConn = null;
+		boolean isSuccess=true;
+		int retry=0;
+		String httpResponse= null; 		
+		do
+		{
+			isSuccess=true;
+			try
+			{   
+				log.debug("Creating the connection..."); 
+				//Check the Use of Proxy Server
+				configureProxySettings();	
+				conwayConn = getUrlConnection(urlStr);
+				 if (conwayConn == null) {
+					log.error("Connection not established");
+					log.debug("Calling wait method");
+					Thread.sleep(5000);
+				}
+				log.debug("Invoking on the server");  				
+				// User=winmansite&Password=02winman5ite&RequestID=
+				StringBuffer uCred=new StringBuffer(request); ;
+				if(!URLDecoder.decode(request,MosServlet.ENC).toLowerCase().matches("user=.*&password=.*&requestid=.*"))
+				{
+					 uCred= new StringBuffer("User=").append(username).append("&Password=").append(password)
+					.append("&RequestID=").append(Math.abs(generator.nextLong() % WintelBrokerConnection.WINTRANID_LIMIT))
+					.append("&WIN_XML=").append(URLEncoder.encode(request,MosServlet.ENC));
+				}				 
+				log.debug("SMS Response Message :" +  uCred);
+				httpResponse = sendQuery(uCred.toString(),conwayConn);
+				log.debug("The connection status is : " + conwayConn.getResponseMessage());
+				log.debug("The http response is : " + httpResponse);
+				isSuccess=true;
+				if (log.isDebugEnabled()) log.debug("Response is..." + httpResponse);             
+			}
+			catch (Exception e)
+			{        
+				
+				httpResponse=e.getMessage();
+				log.error("Exception caught : " + httpResponse);
+				isSuccess=false;				
+				retry++;
+			}
+		}while(!isSuccess && retry < maxRetry);
+		if(!isSuccess && retry >= maxRetry)
+		{
+			if(conwayConn != null)
+			{
+				log.info("Checking if Webserver can be reached");	
+				try {
+					httpResponse = pingHttp(conwayConn.getURL().getHost(), conwayConn.getURL().getPort());
+					if(httpResponse.matches(".* 200 OK .*"))
+					{
+						log.info("Webserver can be reached");
+					}
+				} catch (Exception e1) {
+					// TODO Auto-generated catch block 
+					log.info("Webserver cannot be reached");
+				}
+				finally
+				{					 
+						retry++;						
+				}
+			}
+			throw new BrokerException(httpResponse); 
+		}		 
+		return httpResponse;
+	}
+	
+	static String addPlus(String phoneNumber)
+	{
+		if(!phoneNumber.startsWith("+"))
+			phoneNumber  = "+" + phoneNumber;
+		return phoneNumber;
+	}
+	
+	static String getSourceAddr(String source_addr)
+	{
+		String SourceAddr = source_addr;//= WintelBrokerConnection.ServiceDesp[1][2];
+		if( source_addr != null && source_addr.equalsIgnoreCase(WintelBrokerConnection.ServiceDesp[2][1]))
+		{
+			log.debug("This should be OSIRIS Service");  
+			SourceAddr= WintelBrokerConnection.ServiceDesp[2][2];			 
+		}
+		else if(source_addr != null && source_addr != null && source_addr.equalsIgnoreCase(WintelBrokerConnection.ServiceDesp[0][1]))
+		{
+			log.debug("This should be WINTEST Service");  
+			SourceAddr= WintelBrokerConnection.ServiceDesp[0][2];			 
+		}
+		else if(source_addr != null && source_addr != null && source_addr.equalsIgnoreCase(WintelBrokerConnection.ServiceDesp[1][1]))
+		{
+			log.debug("This should be MANONSITE Service");  
+			SourceAddr= WintelBrokerConnection.ServiceDesp[1][2];;			 
+		}
+		log.debug("SourceAddr:" + SourceAddr);
+		return /*WintelBrokerConnection.ServiceDesp[0][2]*/ SourceAddr;
+	}
+	private static String createSendSimpleMessageXMLRequest( 
+			String[] phoneNumbers,
+			String[] messages,
+			String source_addr,
+			String costId,
+			String servId,
+			long transID)
+	{		 
+		StringBuffer outXml = new StringBuffer("<?xml version=\"1.0\" standalone=\"no\"?>" 
+				+ "<!DOCTYPE SMSRESPONSE SYSTEM \"" + Constants.WIN_MESSAGE_DTD_DEF + "\">"
+				+ "<WIN_DELIVERY_2_SMS>") ;
+		// Add message
+		int r = Math.abs(generator.nextInt(Integer.MAX_VALUE) % 10000);  
+
+		outXml.append("<SMSMESSAGE>");
+		for (int i= 0; i < phoneNumbers.length; i++) 
+		{				 
+			outXml.append("<DESTINATION_ADDR>" + addPlus(phoneNumbers[i]) + "</DESTINATION_ADDR>");	  
+		}
+		for (int j = 0; j < messages.length; j++) 
+		{
+			outXml.append("<TEXT>" + messages[j] + "</TEXT>");
+		}
+		int start_text=1000;
+		//outXml.append("<TRANSACTIONID>" + r + "</TRANSACTIONID>")
+		outXml.append("<TRANSACTIONID>").
+		append(start_text + 1).append(":").append(start_text + messages.length).append("-").append(r).
+		append("</TRANSACTIONID>")
+		.append("<TYPEID>" + typeID + "</TYPEID>") 
+		.append("<SERVICEID>" + servId + "</SERVICEID>")
+		.append("<COSTID>" + costId+ "</COSTID>")
+		//+ "<DELIVERYRECEIPT>" + 13 + "</DELIVERYRECEIPT>");	
+		.append("<WINTRANSACTIONID>" + transID + "</WINTRANSACTIONID>")
+		.append("<SOURCE_ADDR>" + getSourceAddr(source_addr) + "</SOURCE_ADDR>")
+		.append("</SMSMESSAGE>"); 
+
+		outXml.append("</WIN_DELIVERY_2_SMS>");     
+		return outXml.toString();
+	}    
+
+	private static String createSendSimpleMessageXMLRequest(String phoneNumber, String msg, String source_addr,String costId, String servId, long winTransID)
+	throws BrokerException
+	{		 
+		String outXmlStr=null;
+		if(!msg.matches(".*\n.*"))		
+		{
+			int r = Math.abs(generator.nextInt(Integer.MAX_VALUE) % 10000);		 
+			StringBuffer outXml = new StringBuffer("<?xml version=\"1.0\" standalone=\"no\"?>");
+			outXml.append("<!DOCTYPE WIN_DELIVERY_2_SMS SYSTEM \"").append(Constants.WIN_MESSAGE_DTD_DEF + "\">")
+			.append("<WIN_DELIVERY_2_SMS> <SMSMESSAGE>")
+			.append("<DESTINATION_ADDR>").append(addPlus(phoneNumber))
+			.append("</DESTINATION_ADDR>");    
+
+			if(msg.length() > 160)
+			{
+				int ff = Math.round(msg.length()/160);
+				String messages[] = new String [ff+1]; 
+				StringBuffer buf = new StringBuffer(msg);
+				int j=0;
+				int start=0; 
+				int start_text=1000;
+				if (log.isDebugEnabled()) log.debug("buf length:" + buf.length()); 				
+				while(buf.length() > 0)
+				{						 
+					messages[j] = buf.length() > TEXTSIZE ? buf.substring(start,TEXTSIZE -1) : buf.substring(start);						
+					if (log.isDebugEnabled()) log.debug("Sending message[" + j + "] : " + messages[j]); 
+					outXml.append("<TEXT><![CDATA[").append(messages[j]).append("]]></TEXT>");
+					buf = new StringBuffer(buf.substring(messages[j].length()));	
+					if (log.isDebugEnabled()) log.debug("buf length:" + buf.length()); 
+					j++;					
+				}
+				outXml.append("<TRANSACTIONID>").
+				append(start_text + 1).append(":").append(start_text + j).append("-").append(r).
+				append("</TRANSACTIONID>");
+			}
+			else
+			{
+				outXml.append("<TEXT><![CDATA[").append(msg).append("]]></TEXT>").
+				append("<TRANSACTIONID>").append(r).append("</TRANSACTIONID>");
+			}
+
+			outXml.append("<TYPEID>").append(typeID).append("</TYPEID>").
+			append("<SERVICEID>").append(servId).append("</SERVICEID>").	
+			append("<COSTID>").append(costId).append("</COSTID>").	
+			//+ "<DELIVERYRECEIPT>" + 13 + "</DELIVERYRECEIPT>"	
+			append("<WINTRANSACTIONID>").append(winTransID).append("</WINTRANSACTIONID>").	
+			append("<SOURCE_ADDR>").append(getSourceAddr(source_addr)).append("</SOURCE_ADDR>").
+			append("</SMSMESSAGE></WIN_DELIVERY_2_SMS>"); 	
+			outXmlStr=outXml.toString();
+
+		}
+		else
+		{
+			log.debug("Text Message has new line");
+			String[] msgs = msg.split("\n");
+			String [] phoneNumbers = new String[1];
+			phoneNumbers[0]=phoneNumber;
+			outXmlStr=createSendSimpleMessageXMLRequest(phoneNumbers, msgs,source_addr, costId,servId,winTransID); 
+		}		
+		return outXmlStr;
+	}
+	 
+	public String sendSimpleSMS(String phoneNumber, String message)
+	throws BrokerException {
+		// TODO Auto-generated method stub 
+		int winTransID=generator.nextInt(Integer.MAX_VALUE) % WintelBrokerConnection.WINTRANID_LIMIT;
+		//log.debug("Using WINTEST  costid and  servid values");		
+		//return simpleSMS(phoneNumber, message,ServiceDesp[1][1], WINTEST_SERVID,WINTEST_CostID, winTransID);
+		
+			return simpleSMS(phoneNumber, message,WINTEST_SERVID,winTransID);	
+	}
+
+	public String sendSimpleSMS(String phoneNumber, String message, String shortcode)
+	throws BrokerException {		 
+		// TODO Auto-generated method stub
+		String request=null;
+		int winTransID=generator.nextInt(Integer.MAX_VALUE) % WintelBrokerConnection.WINTRANID_LIMIT;
+		
+		log.info("winTransID = " + winTransID);	
+		log.info("Shortcode = " + shortcode);
+		if(!shortcode.equals("CON"))
+		{
+			try
+			{
+				
+				if ((shortcode.equals("+447860002789")) || (shortcode.equals("00447860002789")) || (shortcode.equals("447860002789")))
+				{
+					log.info("phoneNumber = " + phoneNumber);
+					log.info("message = " + message);
+					log.info("Using LONGCODE  costid and  servid values");
+					request=simpleSMS(phoneNumber, message,shortcode, MAXIM_SERVID,LONGCODE_CostID,/*MAXIM_SERVID,LONGCODE_CostID,*/ winTransID);
+					
+				}
+				
+				else if(Integer.parseInt(shortcode) == 62946)
+				//if(shortcode.equals("62946"))
+				{
+					log.info("Using WINTEST  costid and  servid values");
+					request=simpleSMS(phoneNumber, message,ServiceDesp[1][1], WINTEST_SERVID,WINTEST_CostID, winTransID);
+				}			
+			}
+			catch(NumberFormatException nfe)
+			{	
+				//if (Integer.parseInt(shortcode) == 62946){
+				//log.debug("Using WINTEST  costid and  servid values");
+				//request=simpleSMS(phoneNumber, message,shortcode, WINTEST_SERVID,WINTEST_CostID, winTransID);
+				//}  Abi(String phoneNumber, String message,String serviceid, long winTransID, String shortcode)
+				//else{ (String phoneNumber, String message,String source_addr,String servId, String costId, long winTransID)
+			//	log.debug("Using WINTEST costid and  servid values");
+				request=simpleSMS(phoneNumber, message,winTransID, shortcode);
+				//}
+			}
+			
+		}
+		else	
+			request=simpleSMS(phoneNumber, message,MAXIM_SERVID,winTransID);		
+		return request;
+	}
+
+	public String sendSimpleSMS(String[] phoneNumbers, String[] messages,
+			String costId,String servId) throws BrokerException {
+		// TODO Auto-generated method stub
+		String response  = null;
+	    long transID=generator.nextInt(Integer.MAX_VALUE) % WintelBrokerConnection.WINTRANID_LIMIT;
+		int s=0; 		
+		do
+		{ 			
+			String msgs [] = messages;
+			if(messages.length > MAX_XML)
+			{		
+				int arr_size = messages.length - s <= MAX_XML? messages.length - s : MAX_XML;
+				System.arraycopy(messages, s, msgs,0, arr_size);
+				log.debug("s" + s + " , msgs[" + s + " ]= " + messages[s] + " arr_size: " + arr_size + " messages.length: " + messages.length);
+				s+=msgs.length;	
+				log.debug("Sending the next" + s + "SMS messages at a time");				
+			}		
+			
+			
+			String request = createSendSimpleMessageXMLRequest(phoneNumbers, msgs, ServiceDesp[1][1],costId != null? costId : MAXIM_CostID, servId != null? servId : MAXIM_SERVID, transID);
+			if (log.isDebugEnabled()) log.debug("request\n" + request + "\n");
+			response =SendHttpRequest(request);
+		}while(messages.length - s > 0);
+		return response;
+	}
+	 
+	public String simpleSMS(String phoneNumber, String message,String shortcode, long winTransID) throws BrokerException
+	{		
+		String request = createSendSimpleMessageXMLRequest(phoneNumber, message, ServiceDesp[1][1], MAXIM_CostID,shortcode,winTransID); 
+		log.info("request1\n" + request + "\n"); 
+		if (log.isDebugEnabled()) log.debug("request\n" + request + "\n");         
+		return SendHttpRequest(request);		
+	}
+	
+	public String simpleSMS(String phoneNumber, String message, long winTransID, String shortcode) throws BrokerException
+	{		
+		log.info("Estoy en el simpleSMS de Abi");
+		if ((shortcode.equals("+447860002789")) || (shortcode.equals("00447860002789")) || (shortcode.equals("447860002789")))
+		{
+		String request = createSendSimpleMessageXMLRequest(phoneNumber, message, shortcode, LONGCODE_CostID, MAXIM_SERVID,winTransID); 
+		if (log.isDebugEnabled()) log.debug("request\n" + request + "\n");         
+		return SendHttpRequest(request);
+		}
+		else{
+			String request = createSendSimpleMessageXMLRequest(phoneNumber, message, shortcode, WINTEST_CostID, WINTEST_SERVID,winTransID); 
+			if (log.isDebugEnabled()) log.debug("request\n" + request + "\n");   
+			return SendHttpRequest(request);
+		}
+	}
+
+	public String simpleSMS(String phoneNumber, String message,String source_addr,String servId, String costId, long winTransID) throws BrokerException
+	{		
+		   
+		String request = createSendSimpleMessageXMLRequest(phoneNumber, message,source_addr, costId,servId,winTransID); 
+		log.info("request\n" + request + "\n"); 
+		if (log.isDebugEnabled()) log.debug("request\n" + request + "\n");         
+		return SendHttpRequest(request);		
+	}
+	
+	
+}

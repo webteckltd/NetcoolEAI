@@ -1,0 +1,115 @@
+package com.o2.osiris.remedy;
+
+public class Constants 
+{
+
+    // schema name
+    public final static String TT_SCHEMA = "TT:TroubleTicket";
+
+    // field ids
+    public final static long TICKET_ID = 1L;
+    public final static long SUBMITTER = 2L;
+    public final static long CREATE_DATE = 3L;
+    public final static long TICKET_OWNING_INDIVIDUAL = 4L;
+    public final static long LAST_MODIFIED_BY = 5L;
+    public final static long MODIFIED_DATE = 6L;
+    public final static long STATUS = 7L;
+    public final static long PROBLEM_SUMMARY = 8L;
+    public final static long STATUS_HISTORY = 15L;
+    public final static long CASE_TYPE = 536870917L;
+    public final static long CATEGORY = 536870918L;
+    public final static long FIRST_NAME = 536870922L;
+    public final static long PROBLEM_DETAILS = 536870923L;
+    public final static long SOURCE = 536870924L;
+    public final static long GROUP = 536870925L;
+    public final static long SITE_NAME_2 = 536870927L;
+    public final static long RESOLUTION_CASE_TYPE = 536870928L;
+    public final static long DEPARTMENT = 536870929L;
+    public final static long SITE_NAME = 536870930L;
+    public final static long SUBMITTER_GROUP = 536870933L;
+    public final static long FAULT_FREQUENCY = 536870935L;
+    public final static long FAULT_OCCURANCE = 536870945L;
+    public final static long PRIORITY = 536870947L;
+    public final static long LAST_ENTRY = 536870948L;
+    public final static long CSR_DETAILS_2 = 536870949L;
+    public final static long CUSTOMER_TYPE = 536870950L;
+    public final static long ITEM = 536870951L;
+    public final static long RESOLUTION_CATEGORY = 536870954L;
+    public final static long SERVICE_AFFECTING = 536870978L;
+    public final static long TICKET_TYPE = 536870980L;
+    public final static long CSR_RAISED = 536870981L;
+    public final static long RESOLUTION_ITEM = 536870983L;  
+    public final static long RESOLUTION_GROUP = 536870988L;
+    public final static long RESOLUTION_INDIVIDUAL = 536870989L; 
+    public final static long SOLUTION_SUMMARY = 536871085L; 
+    public final static long SOLUTION_DETAILS = 536870991L; 
+    public final static long CALL_OUT = 536870993L;
+    public final static long CSR_2_REQUIRED = 536870994L;
+    public final static long ACTUAL_RESOLUTION_DATE = 536870998L;
+    public final static long INDIVIDUAL_RESOLUTION_DATE = 536871000L;
+    public final static long WORK_LOG = 536871003L;
+    public final static long NO_OF_OUTSTANDING_TASKS = 536871021L;
+    public final static long CSR_3_REQUIRED = 536871023L;
+    public final static long CURRENT_IMPACT = 536871034L;
+    public final static long REQUESTER_FOUND = 536871061L;
+    public final static long CUSTOMER = 536871066L;
+    public final static long INC_PROB = 536871069L;
+    public final static long REQUESTER_NAME = 536871080L;
+    public final static long SLA_STATUS = 536871112L;
+    public final static long LOG_TIME = 536871115L;
+    public final static long TMP_TIME_OF_DAY = 536871116L;
+    public final static long STATUS_3 = 536871127L;
+    public final static long TMP_SLA_IMPORT_FLAG = 536871140L;
+    public final static long KNOWN_ERROR = 537800010L;
+    public final static long SEVERITY = 536870974L;
+    public final static long EVENT_TIME = 536870973L;
+    public final static long SOURCE_CLASS = 536870975L;
+    public final static long PROBABLE_CAUSE = 536871012L;
+    public final static long SPECIFIC_PROBLEMS = 536870979L;
+    public final static long ADDITIONAL_TEXT = 536870996L;
+    public final static long ADDITIONAL_INFO = 536871001L;
+    public final static long MONITOR_UNTIL_DATE = 536870997L;
+    public final static long WORK_LOG_TEMPORARY_FIELD= 100000223/*536871999L*/; 
+  
+    
+    public final static long CIC_COUNT = 536871152L;
+    public final static long CIC_ALERT_KEY = 536871153L;
+    public final static long CIC_MANUFACTURER = 536871151L;
+    public final static long CIC_NE_NAME	= 536871172L;	
+    public final static long CIC_MANAGER	= 536871171L;	
+    public final static long CIC_SERVER_NAME= 536871170L;	
+    public final static long CIC_CDS_ID	= 536871169L;	
+    public final static long CIC_CDS_TYPE= 536871168L;	
+    public final static long CIC_TIME_TO_FIX	= 536871161L;	
+    public final static long CIC_TROUBLE_TICKET	= 536871160L;	
+    public final static long CIC_TT_NOTE	= 536871159L;	
+    public final static long CIC_TT_ELEMENT_ID	= 536871174L;	
+    public final static long CIC_IDENTIFIER	= 536871173L;	
+    public final static long CIC_TT_DESCRIPTION= 536871154L;	
+    public final static long CIC_TT_FIELD3= 536871156L;	
+    public final static long CIC_TT_FIELD2	= 536871157L;	
+    public final static long CIC_TT_FIELD1	= 536871158L;	
+    public final static long CIC_TT_FIELD4	= 536871155L;	
+    public final static long CIC_OUTAGE_DURATION	= 536871164L;	
+    public final static long CIC_OUTAGE_END	= 536871163L;	
+    public final static long CIC_OUTAGE_START= 536871162L;	
+    public final static long CIC_FAULT_STATUS= 536871165L;	
+    public final static long CIC_FAULT_IMPACT= 536871167L;	
+    public final static long CIC_FAULT_PRIORITY = 536871166L;	
+    public final static long STATE_CHANGE= 536871207L;	
+    public final static long FIRST_OCCURENCE	= 536871188L;	
+    public final static long CIC_OBJECT_TYPE	= 536871179L;	
+    public final static long CIC_NOTIFICATION_FLAG= 536871183L;	
+    public final static long CIC_OUTAGE_TYPE= 536871184L;	
+    public final static long CIC_TT_FLAG= 536871186L;	
+    public final static long CIC_COMMITMENT_TOTAL = 536871182L;	
+    public final static long CIC_COMMITMENT_POINTS = 536871181L;	
+    public final static long CIC_ALARM_IMPACT = 536871180L;	
+    public final static long CIC_SEVERITY = 536871178L;	
+    public final static long CIC_POLL = 536871177L;	
+    public final static long CIC_OWNER_UID	= 536871176L;	
+    public final static long CIC_SERVER_SERIAL = 536871175L;	
+    public final static long CIC_TIME_TO_FIX_UNITS = 536871189L;	
+    public final static long CIC_SERVICE_GROUP = 536871191L;	    
+    
+}

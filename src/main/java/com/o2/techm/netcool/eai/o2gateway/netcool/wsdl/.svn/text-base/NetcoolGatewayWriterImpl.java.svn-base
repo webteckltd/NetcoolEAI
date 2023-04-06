@@ -1,0 +1,43 @@
+package com.o2.o2gateway.netcool.wsdl;
+
+import com.iona.schemas.references.Reference;
+
+/**
+ * com.o2.o2gateway.netcool.wsdl.NetcoolGatewayWriterImpl
+ */
+public class NetcoolGatewayWriterImpl implements java.rmi.Remote {
+
+    /**
+     * netcool_connect.
+     * 
+     * @param aClient (Reference)
+     * @return boolean
+     * @throws NetcoolGatewayProcessEventFailure_Exception  (NetcoolGatewayProcessEventFailure_Exception)
+     */
+    public boolean netcool_connect(Reference aClient) throws NetcoolGatewayProcessEventFailure_Exception {
+        // User code goes in here.
+        return false;
+    }
+    /**
+     * sendEvent.
+     * 
+     * @param aEvent (NetcoolGatewayNetcoolEvent)
+     * @return boolean
+     * @throws NetcoolGatewayProcessEventFailure_Exception  (NetcoolGatewayProcessEventFailure_Exception)
+     */
+    public boolean sendEvent(NetcoolGatewayNetcoolEvent aEvent) throws NetcoolGatewayProcessEventFailure_Exception {
+        // User code goes in here.
+        return false;
+    }
+    /**
+     * deregister.
+     * 
+     * @param aClient (Reference)
+     * @return boolean
+     * @throws NetcoolGatewayProcessEventFailure_Exception  (NetcoolGatewayProcessEventFailure_Exception)
+     */
+    public boolean deregister(Reference aClient) throws NetcoolGatewayProcessEventFailure_Exception {
+        // User code goes in here.
+        return false;
+    }
+}

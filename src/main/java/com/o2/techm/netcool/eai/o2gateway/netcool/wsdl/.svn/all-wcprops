@@ -1,0 +1,173 @@
+K 25
+svn:wc:ra_dav:version-url
+V 118
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl
+END
+NetcoolGatewayWriterDeregisterResult.java
+K 25
+svn:wc:ra_dav:version-url
+V 160
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterDeregisterResult.java
+END
+NetcoolGatewayReaderServer.java
+K 25
+svn:wc:ra_dav:version-url
+V 150
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReaderServer.java
+END
+NetcoolGatewayGatewayClientTakeEventsResult.java
+K 25
+svn:wc:ra_dav:version-url
+V 167
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClientTakeEventsResult.java
+END
+NetcoolGatewayWriterDeregister.java
+K 25
+svn:wc:ra_dav:version-url
+V 154
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterDeregister.java
+END
+NetcoolGatewayGatewayClientTakeEvents.java
+K 25
+svn:wc:ra_dav:version-url
+V 161
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClientTakeEvents.java
+END
+NetcoolGatewayGatewayClientTypeFactory.java
+K 25
+svn:wc:ra_dav:version-url
+V 162
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClientTypeFactory.java
+END
+NetcoolGatewayNVPairList.java
+K 25
+svn:wc:ra_dav:version-url
+V 148
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayNVPairList.java
+END
+NetcoolGatewayReaderTypeFactory.java
+K 25
+svn:wc:ra_dav:version-url
+V 155
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReaderTypeFactory.java
+END
+NetcoolGatewayWriterImpl.java
+K 25
+svn:wc:ra_dav:version-url
+V 148
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterImpl.java
+END
+NetcoolGatewayNVPair.java
+K 25
+svn:wc:ra_dav:version-url
+V 144
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayNVPair.java
+END
+NetcoolGatewayGatewayClient.java
+K 25
+svn:wc:ra_dav:version-url
+V 151
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClient.java
+END
+NetcoolGatewayReader.java
+K 25
+svn:wc:ra_dav:version-url
+V 144
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReader.java
+END
+NetcoolGatewayWriterServer.java
+K 25
+svn:wc:ra_dav:version-url
+V 150
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterServer.java
+END
+NetcoolGatewayReaderEventResult.java
+K 25
+svn:wc:ra_dav:version-url
+V 155
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReaderEventResult.java
+END
+NetcoolGatewayReaderEvent.java
+K 25
+svn:wc:ra_dav:version-url
+V 149
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReaderEvent.java
+END
+NetcoolGatewayNetcoolEvent.java
+K 25
+svn:wc:ra_dav:version-url
+V 150
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayNetcoolEvent.java
+END
+NetcoolGatewayProcessEventFailure_Exception.java
+K 25
+svn:wc:ra_dav:version-url
+V 167
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayProcessEventFailure_Exception.java
+END
+NetcoolGatewayWriterTypeFactory.java
+K 25
+svn:wc:ra_dav:version-url
+V 155
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterTypeFactory.java
+END
+NetcoolGatewayWriterNetcool_connectResult.java
+K 25
+svn:wc:ra_dav:version-url
+V 165
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterNetcool_connectResult.java
+END
+NetcoolGatewayWriterNetcool_connect.java
+K 25
+svn:wc:ra_dav:version-url
+V 159
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterNetcool_connect.java
+END
+NetcoolGatewayWriter.java
+K 25
+svn:wc:ra_dav:version-url
+V 144
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriter.java
+END
+NetcoolGatewayGatewayClientImpl.java
+K 25
+svn:wc:ra_dav:version-url
+V 155
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClientImpl.java
+END
+NetcoolGatewayEventType.java
+K 25
+svn:wc:ra_dav:version-url
+V 147
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayEventType.java
+END
+NetcoolGatewayReaderImpl.java
+K 25
+svn:wc:ra_dav:version-url
+V 148
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayReaderImpl.java
+END
+NetcoolGatewayGatewayClientServer.java
+K 25
+svn:wc:ra_dav:version-url
+V 157
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayGatewayClientServer.java
+END
+NetcoolGatewayWriterSendEventResult.java
+K 25
+svn:wc:ra_dav:version-url
+V 159
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterSendEventResult.java
+END
+NetcoolGatewayProcessEventFailure.java
+K 25
+svn:wc:ra_dav:version-url
+V 157
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayProcessEventFailure.java
+END
+NetcoolGatewayWriterSendEvent.java
+K 25
+svn:wc:ra_dav:version-url
+V 153
+/Corporativo_Malaga/!svn/ver/14214/Proyectos/Activos/Corporativo/MOS/trunk/O2Gateway/src/com/o2/o2gateway/netcool/wsdl/NetcoolGatewayWriterSendEvent.java
+END

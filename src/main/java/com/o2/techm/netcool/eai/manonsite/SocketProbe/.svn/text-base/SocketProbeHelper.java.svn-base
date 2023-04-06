@@ -1,0 +1,54 @@
+
+package com.o2.manonsite.SocketProbe;
+
+import java.rmi.RemoteException;
+
+import org.apache.log4j.Logger;
+
+import com.iona.ps.artix.transports.socket.Status;
+import com.o2.manonsite.SocketProbe.wsdl.*;
+import com.o2.common.Constants;  
+
+public class SocketProbeHelper
+{
+	private static Logger log = Logger.getLogger(SocketProbeHelper.class);
+	
+    
+	public static Status connectionStatus = Status.instance(
+            	Constants.SOCKET_PROBE_NAMESPACE, 
+            	Constants.SOCKET_PROBE_SERVICE,
+				Constants.SOCKET_PROBE_PORT
+            );
+    
+    public static void raiseEvent(SocketProbe socketProbe, Event event) throws SocketProbeHelperException {
+        try
+        {
+            if (socketProbe == null) {
+                String warning  = "Socketprobe is null; perhaps it has not been initalised fully yet"; 
+                log.warn(warning);
+                throw new SocketProbeHelperException(warning);  
+            }
+            
+            log.debug("Synchronising on socketProbe..."); 
+            synchronized (socketProbe) {  
+                log.debug("About to invoke on the socket probe..."); 
+	            socketProbe.raiseEvent(event);
+	            log.debug("connectionStatus Message:-" + connectionStatus.getMessage());
+	            log.debug("finished invocation on socket  probe. "); 
+	            if (connectionStatus.isConnectionDown()) {
+	                log.debug("Communication problem with the Socket Probe; details: " + connectionStatus.getMessage());
+	                throw new SocketProbeHelperException(connectionStatus.getMessage());
+	            }
+            }
+        }
+        catch (RemoteException e)
+        {
+            // Unlikely that this will ever be called in Artix 2.1.5, as raiseEvent is a
+            // one-way method.
+            throw new SocketProbeHelperException(e.getMessage(), e);
+            
+        }
+        
+        
+    }
+}

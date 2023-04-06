@@ -1,0 +1,3838 @@
+
+
+package com.o2.osiris.persistence;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Vector;
+
+import org.apache.log4j.Logger;
+
+import com.o2.osiris.jdbc.PoolConnectionManager;
+import com.o2.osiris.serviceview.CDSStatus;
+import com.o2.osiris.serviceview.Cellsite;
+import com.o2.osiris.serviceview.Contact;
+import com.o2.osiris.serviceview.Customer;
+import com.o2.osiris.serviceview.NetworkComponent;
+import com.o2.osiris.serviceview.Recalc;
+import com.o2.osiris.serviceview.Service;
+import com.o2.osiris.serviceview.ServiceViewException;
+import com.o2.osiris.serviceview.SortOrder;
+import com.o2.osiris.serviceview.StatusValues;
+import com.o2.osiris.serviceview.User;
+
+/** Class used to query data that is persistant
+ *  and stored in either an Persistence or a Dimension database.
+ *  The data is accessed through views.
+ */
+public class Persistence 
+{
+    private static Logger log = Logger.getLogger(Persistence.class);
+
+    private static final String JDBC_DRIVER = "oracle.jdbc.driver.OracleDriver";
+
+    private static String ORACLE_POOL_NAME = "OracleConnectionPool";
+
+    private final int m_allServiceGroups = 4; //This represents all the service
+                                              // groups e.g. GSM, GPRS
+
+    private static final String[] STATUS_TYPE_VALUES = { "Unknown", "Available", "Degraded", "Unavailable" };
+
+
+    public Persistence(String url, String login, String password) 
+    	throws PersistenceException
+    {
+        if(!PoolConnectionManager.isValid(ORACLE_POOL_NAME))
+        {
+            try
+            {
+                log.info("Msg(9) Persistence.Persistence() - Try to create a pool in the PoolConnectionMgr");
+                PoolConnectionManager.createPool(ORACLE_POOL_NAME, JDBC_DRIVER, url, login, password);
+            }
+            catch(SQLException sqle)
+            {
+                log.info("Msg(10) Persistence.Persistence() - Cannot create a pool in the PoolConnectionMgr");
+                throw new PersistenceException (sqle, "Error in creating the pool manager" );
+            }
+        }
+    }
+    
+
+    /** Method name: getName
+        Inherited from PersistencePerformer*/
+    public String getName()
+    {
+        log.info("Msg(11) Persistence.getName() - test getName ");
+        return "Persistence";
+    }
+
+   /** Method name: validateCellSiteID
+       Checks that the supplied cellsite id exists. If it does, the method returns true, otherwise it returns false.
+       Need to check for Type='Cellsite' and Provision Status >100 in the Components view.   */
+   public boolean validateCellSiteID(String cellsiteId) throws ServiceViewException
+   {
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        boolean o_Answer=false;
+        Connection oracleConnection = null;
+        try
+        {
+            log.info("Msg(12) Persistence.validateCellSiteID() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(13) Persistence.validateCellSiteID() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT CELLSITE_REF FROM SV_CELLSITES_VIEW WHERE "
+                    + "CELLSITE_REF='"+cellsiteId+"' AND PROVISION_STATUS>100 AND ROWNUM < 2";
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    log.info("Msg(14) Persistence.validateCellSiteID() - Statement created");
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(15) Persistence.validateCellSiteID() - the resultset is not null");
+                        o_Answer=true;
+                    }
+                    else
+                    {
+                        log.info("Msg(16) Persistence.validateCellSiteID() - the resultset is null");
+                        o_Answer=false;
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(17) Persistence.validateCellSiteID() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateCellSiteID "+e.getMessage());
+                }
+            }
+            else log.info("Msg(18) Persistence.validateCellSiteID() - Connection null");
+         }
+        catch (SQLException e)
+        {
+            log.info("Msg(19) Persistence.validateCellSiteID() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateCellSiteID "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(20) Persistence.validateCellSiteID() - Connection returned");
+        }
+        return o_Answer;
+   }
+
+   /** Method name: validateCellSiteName
+    Checks for a matching Cellsite name in the DB.
+    If there is a direct match with the cellsite name in the service view, the method will return a Vector
+    object containing only one Cellsite object. The cellsite object will contain the cellsite id.
+    If there is not a direct match, the returned Vector object will contain a list of Cellsite objects containing
+    the cellsite names that contained the supplied cellsite name.
+    */
+   public Vector validateCellSiteName(String cellsiteName) throws ServiceViewException
+   {
+        String sQuery="";
+        String sQuery2="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector o_cellNames=new Vector();
+        Cellsite o_cellSite=null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(21) Persistence.validateCellSiteName() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(22) Persistence.validateCellSiteName() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+                //query1
+                sQuery="SELECT CELLSITE_REF, LOCATION FROM SV_CELLSITES_VIEW WHERE "
+                    + "LOCATION='"+cellsiteName+"' AND PROVISION_STATUS>100 AND ROWNUM < 2";
+
+                //query2
+                sQuery2="SELECT CELLSITE_REF, LOCATION FROM SV_CELLSITES_VIEW WHERE "
+                    + "(SOUNDEX(LOCATION)=SOUNDEX('"+cellsiteName+"') OR (upper(LOCATION) LIKE '%'"
+                    + "||upper('"+cellsiteName +"')||'%')) AND PROVISION_STATUS>100"
+                    +" ORDER BY LOCATION ASC";
+
+                log.info("Msg(23) Query:"+sQuery);
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    //if there is one result
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(24) Persistence.validateCellSiteName() - the resultset is not null - exact match");
+                        o_cellSite=new Cellsite();
+                        o_cellSite.setCellsiteName(o_ResultSet.getString("LOCATION"));
+                        o_cellSite.setCellsiteId(o_ResultSet.getString("CELLSITE_REF"));
+                        o_cellNames.add(o_cellSite);
+                        log.info("Msg(25) Persistence.validateCellSiteName() - Vector returned: CellsiteId:"
+                            +((Cellsite)o_cellNames.get(0)).getCellsiteId()
+                            +" CellsiteName:"+((Cellsite)o_cellNames.get(0)).getCellsiteName());
+                    }
+                    //if there is no result for an exact match
+                    else
+                    {
+                        log.info("Msg(26) Persistence.validateCellSiteName() - the resultset is null - no exact match");
+                        log.info("Msg(27) Query:"+sQuery2);
+                        o_ResultSet=o_Statement.executeQuery(sQuery2);
+
+                        //if there are result(s) for a possible match
+                        while (o_ResultSet.next()!=false)
+                        {
+                            log.info("Msg(28) Persistence.validateCellSiteName() - the resultset is not null - there are possible matchs");
+                            o_cellSite=new Cellsite();
+                            o_cellSite.setCellsiteName(o_ResultSet.getString("LOCATION"));
+                            o_cellSite.setCellsiteId(o_ResultSet.getString("CELLSITE_REF"));
+                            o_cellNames.add(o_cellSite);
+                            log.info("Msg(29) Persistence.validateCellSiteName() - the object name "+o_cellSite.getCellsiteName());
+                        }
+                        log.info("Msg(30) Persistence.validateCellSiteName() - Vector returned of size "+ o_cellNames.size());
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(31) Persistence.validateCellSiteName() - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateCellSiteName() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(32) Persistence.validateCellSiteName() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(33) Persistence.validateCellSiteName() - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateCellSiteName() "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(34) Persistence.validateCellSiteName() - Connection returned");
+        }
+        return o_cellNames;
+   }
+
+   /** Method name: getNotificationDetails
+    The method returns a vector of 0 or more Contact objects.
+    Return the contacts for a Domain or Service that has the id = CDSId for
+    the object Type and status provided as parameters.
+    The phase 1 data model does not support contacts for components and the
+    method should return NULL if objectType = Component.
+    */
+   public Vector getNotificationDetails(String CDSId, int status, int objectType) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector newContacts=new Vector();
+        Contact o_Contact=null;
+        Connection oracleConnection = null;
+
+
+        try
+        {
+            log.info("Msg(35) Persistence.getNotificationDetails() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(36) Persistence.getNotificationDetails() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+
+                if(objectType== CDSStatus.SERVICE)// Service
+                {
+                    sQuery="SELECT SV_SERV_CONTACTS_VIEW.CONTACT_ID, PREFERRED_METHOD, EMAIL, SMS, FAX FROM SV_SERV_CONTACTS_VIEW, SV_CONTACTS_VIEW "
+                        +"WHERE SV_SERV_CONTACTS_VIEW.SERVICE_ID='"+CDSId+"' "
+                        +"AND SV_SERV_CONTACTS_VIEW.STATUS="+status+" "
+                        +"AND SV_SERV_CONTACTS_VIEW.CONTACT_ID=SV_CONTACTS_VIEW.CONTACT_ID ";
+                    log.info("Msg(37) Persistence.getNotificationDetails() - Service - CDSId:"+CDSId+" status:"+status);
+                }
+                else if (objectType==CDSStatus.DOMAIN)// Domain
+                {
+                    sQuery="SELECT SV_DOM_CONTACTS_VIEW.CONTACT_ID, PREFERRED_METHOD, EMAIL, SMS, FAX FROM SV_DOM_CONTACTS_VIEW, SV_CONTACTS_VIEW "
+                        +"WHERE SV_DOM_CONTACTS_VIEW.DOMAIN_ID='"+CDSId+"' "
+                        +"AND SV_DOM_CONTACTS_VIEW.STATUS="+status+" "
+                        +"AND SV_DOM_CONTACTS_VIEW.CONTACT_ID=SV_CONTACTS_VIEW.CONTACT_ID ";
+                    log.info("Msg(38) Persistence.getNotificationDetails() - Domain - CDSId:"+CDSId+" status:"+status
+                        +" objectType: "+objectType);
+                }
+                else // Component
+                {
+                    sQuery="";
+                    log.info("Msg(39) Persistence.getNotificationDetails() - Component");
+                }
+                log.info("Msg(40) Persistence.getNotificationDetails() - Query: "+sQuery);
+
+                if (sQuery.compareTo("")!=0)
+                {
+                    //run the query
+                    try
+                    {
+                        o_Statement=oracleConnection.createStatement();
+                        o_ResultSet=o_Statement.executeQuery(sQuery);
+                        //if there is one result
+                        while (o_ResultSet.next()!=false)
+                        {
+                            log.info("Msg(41) Persistence.getNotificationDetails() - the resultset is not null - there are matchs");
+                            o_Contact=new Contact();
+                            o_Contact.setContactId(o_ResultSet.getString("CONTACT_ID"));
+                            o_Contact.setPreferredMethod(o_ResultSet.getString("PREFERRED_METHOD"));
+                            o_Contact.setEMail(o_ResultSet.getString("EMAIL"));
+                            o_Contact.setSMS(o_ResultSet.getString("SMS"));
+                            o_Contact.setFax(o_ResultSet.getString("FAX"));
+                            newContacts.add(o_Contact);
+                        }
+                        log.info("Msg(42) Persistence.getNotificationDetails() - this is a vector of "+newContacts.size());
+                    }
+                    catch (SQLException e)
+                    {
+                        log.info("Msg(43) Persistence.getNotificationDetails() - a connection couldn't be established - SQLException"+e);
+                        throw new ServiceViewException(e,"SQLException Error occured in getNotificationDetails()"+e.getMessage());
+                    }
+                }
+            }
+            else log.info("Msg(44) Persistence.getNotificationDetails() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(45) Persistence.getNotificationDetails() - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getNotificationDetails()"+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(46) Persistence.getNotificationDetails() - Connection returned");
+        }
+        return newContacts;
+   }
+
+   /** Method name: getCurrentCascadeStatus
+    A list of CDSStatus is passed as well as a String sortOrder.
+    The CDSStatus have their CDSId, objectType and serviceGroup already defined.
+    The Cascade Status of each CDSStatus is returned by the query, set in each object,
+    and each object put back to a vector which is returned to the caller.
+    The CDSStatus are sorted within the Vector by the sortOrder parameter.
+    */
+    public Vector getCurrentCascadeStatus(Vector list,String sortOrder) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned=new Vector();
+        Connection oracleConnection = null;
+
+
+        try
+        {
+            log.info("Msg(47) Persistence.getCurrentCascadeStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(48) Persistence.getCurrentCascadeStatus() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+
+                sQuery="SELECT CELLSITE_REF, LOCATION, STATUS, OUTAGE_TYPE, SERVICE_GROUP, TIMESTAMP, TIME_TO_FIX, "
+// v1.2 +"TIME_TO_FIX_UNITS, decode(CAUSE_CDS_TYPE,'CELLSITE','Local','BSS','Regional','SGSN','Major','MSC','Major',' ') CRITICALITY, "
++"decode(CAUSE_CDS_TYPE,'CELLSITE','Local','BSS','Regional','SGSN','Major','MSC','Major',' ') CRITICALITY, "
+                    +"COMMITMENT_TOTAL, nvl(TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, nvl(CAUSE_CDS_ID,' ') AS CAUSE_CDS_ID, "
+                    +"CDS_ID, CDS_NAME " //inputs from the Vector
+                    +"FROM SV_CASCADE_STATUS WHERE ";
+
+                if (list.size()==1&&((CDSStatus)list.get(0)).getCDSId()==null)//if no CDSId selected, so network
+                {
+                    sQuery+="STATUS != 1 AND ";
+                }
+                else
+                {
+                    sQuery+="CELLSITE_REF IN (";
+                    for (int i=0;i<list.size() ;i++ )
+                    {
+                        if (i!=0)
+                        {
+                            sQuery+=",";
+                        }
+                        sQuery+="'"+((CDSStatus)list.get(i)).getCDSId()+"'";
+                    }
+                    sQuery+=") AND ";
+                }
+
+                sQuery+=" OBJECT_TYPE="+CDSStatus.COMPONENT+" AND CDS_TYPE='CELLSITECASCADE' AND PROVISION_STATUS>100 "; //only checking for CellsiteCascade records
+
+                if (((CDSStatus)list.get(0)).getServiceGroup()== m_allServiceGroups) //all cellsites
+                {
+                    //all service-group of cellsites selected, all cellsites expected to have same service group as first one
+                }
+                else
+                {
+                    sQuery+=" AND SERVICE_GROUP="+((CDSStatus)list.get(0)).getServiceGroup()+" ";//all cellsites will have same type
+                }
+
+                if (sortOrder.compareTo(SortOrder.CSR)==0)
+                {   sQuery+="ORDER BY CELLSITE_REF ASC";    }
+                else if (sortOrder.compareTo(SortOrder.CELLSITE_NAME)==0)
+                {   sQuery+="ORDER BY LOCATION ASC";    }
+                else if (sortOrder.compareTo(SortOrder.EST_TIME_EVENT)==0)
+                {   sQuery+="ORDER BY TIMESTAMP DESC, CELLSITE_REF ASC";    }
+                else if (sortOrder.compareTo(SortOrder.COMMITMENT_POINTS)==0)
+                {   sQuery+="ORDER BY nvl(COMMITMENT_TOTAL,0) DESC, CELLSITE_REF ASC";  }
+                else if (sortOrder.compareTo(SortOrder.FAILED_COMPONENT)==0)
+                {   sQuery+="ORDER BY CAUSE_CDS_ID ASC, CELLSITE_REF ASC";  }
+                else if (sortOrder.compareTo(SortOrder.STATUS)==0)
+                {   sQuery+="ORDER BY STATUS ASC, OUTAGE_TYPE ASC, CELLSITE_REF ASC";   }
+
+                log.info("Msg(49) Persistence.getCurrentCascadeStatus() - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setCellsiteRef(o_ResultSet.getString("CELLSITE_REF"));
+                        isis.setLocation(o_ResultSet.getString("LOCATION"));
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setServiceGroup(o_ResultSet.getInt("SERVICE_GROUP"));
+                        isis.setTimeStamp(o_ResultSet.getTimestamp("TIMESTAMP"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCauseCDSType(o_ResultSet.getString("CRITICALITY"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setCDSId(o_ResultSet.getString("CDS_ID"));
+                        isis.setCDSName(o_ResultSet.getString("CDS_NAME"));
+                        vectorReturned.add(isis);
+                        log.info("Msg(50) Persistence.getCurrentCascadeStatus()"
+                            +" - Name: "+((CDSStatus)vectorReturned.lastElement()).getCDSName()
+                            +" - CellsiteRef: "+((CDSStatus)vectorReturned.lastElement()).getCellsiteRef()
+                            +" - Status: "+((CDSStatus)vectorReturned.lastElement()).getStatus()
+                            +" - TimeStamp: "+((CDSStatus)vectorReturned.lastElement()).getTimeStamp());
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(51) Persistence.getCurrentCascadeStatus() - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getCurrentCascadeStatus() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(52) Persistence.getCurrentCascadeStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(53) Persistence.getCurrentCascadeStatus() - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getCurrentCascadeStatus() "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(54) Persistence.getCurrentCascadeStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+    /** Method name: getHistoricalCascadeStatus
+    A list of CDSStatus is passed as well as a String sortOrder.
+    The CDSStatus have their CDSId and serviceGroup already defined.
+    A list of Cascade Status for each of the CDSStatus is returned by the query,
+    set in a new CDSStatus object, and each object put back to a vector which is returned to the caller.
+    The CDSStatus are sorted within the Vector by the sortOrder parameter.
+    */
+    public Vector getHistoricalCascadeStatus(Vector list,String sortOrder) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+
+        try
+        {
+            log.info("Msg(55) Persistence.getHistoricalCascadeStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(56) Persistence.getHistoricalCascadeStatus() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+
+                java.sql.Date d1= new java.sql.Date(((CDSStatus)list.get(0)).getStartTime().getTime());//START_TIME date
+                java.sql.Time t1= new java.sql.Time(((CDSStatus)list.get(0)).getStartTime().getTime());//START_TIME time
+                java.sql.Date d2= new java.sql.Date(((CDSStatus)list.get(0)).getEndTime().getTime());//END_TIME date
+                java.sql.Time t2= new java.sql.Time(((CDSStatus)list.get(0)).getEndTime().getTime());//END_TIME time
+
+                //query
+                sQuery="SELECT CELLSITE_REF, LOCATION, STATUS, OUTAGE_TYPE, SERVICE_GROUP, START_TIME, TIME_TO_FIX, "
+                    //1.2+"TIME_TO_FIX_UNITS, decode(CAUSE_CDS_TYPE,'CELLSITE','Local','BSS','Regional','SGSN','Major','MSC','Major',' ') CRITICALITY, "
+                    +" decode(CAUSE_CDS_TYPE,'CELLSITE','Local','BSS','Regional','SGSN','Major','MSC','Major',' ') CRITICALITY, "
+                    +"COMMITMENT_TOTAL, nvl(TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, nvl(CAUSE_CDS_ID,' ') AS CAUSE_CDS_ID, END_TIME, "
+                    +"CDS_ID, OBJECT_TYPE, CDS_NAME " //inputs from the Vector
+                    +"FROM SV_HISTORICAL_STATUS Where ";
+
+                sQuery+="CELLSITE_REF IN (";
+                for (int i=0;i<list.size() ;i++ )
+                {
+                    if (i!=0)
+                    {
+                        sQuery+=", ";
+                    }
+                    sQuery+="'"+((CDSStatus)list.get(i)).getCDSId()+"'";
+                }
+                sQuery+=") AND OBJECT_TYPE="+CDSStatus.COMPONENT+"  AND CDS_TYPE='CELLSITECASCADE' AND PROVISION_STATUS>100 ";
+
+                if (((CDSStatus)list.get(0)).getServiceGroup()== m_allServiceGroups) //all cellsites
+                {
+                    //all service-group of cellsites selected, all cellsites expected to have same service group as first one
+                }
+                else
+                {
+                    sQuery+="AND SERVICE_GROUP="+((CDSStatus)list.get(0)).getServiceGroup()+" ";//all cellsites will have same type
+                }
+
+                sQuery+=" AND (START_TIME <to_date('";//start time after the start time of first CDSStatus (all CDSStatus should have same start time in input)
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss') AND NVL(END_TIME,to_date('";
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss'))>to_date('";
+                sQuery+=d1.toString()+" "+t1.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss')) ";
+
+                if (sortOrder.compareTo(SortOrder.CSR)==0)
+                {   sQuery+="ORDER BY CELLSITE_REF ASC, START_TIME ASC, HIST_STATUS_ID ASC";    }
+                else if (sortOrder.compareTo(SortOrder.CELLSITE_NAME)==0)
+                {   sQuery+="ORDER BY LOCATION ASC, START_TIME ASC, HIST_STATUS_ID ASC";    }
+                else if (sortOrder.compareTo(SortOrder.EST_TIME_EVENT)==0)
+                {   sQuery+="ORDER BY START_TIME DESC, HIST_STATUS_ID DESC, CELLSITE_REF ASC";  }
+                else if (sortOrder.compareTo(SortOrder.COMMITMENT_POINTS)==0)
+                {   sQuery+="ORDER BY nvl(COMMITMENT_TOTAL,0) DESC, CELLSITE_REF ASC, START_TIME ASC, HIST_STATUS_ID ASC";  }
+                else if (sortOrder.compareTo(SortOrder.FAILED_COMPONENT)==0)
+                {   sQuery+="ORDER BY CAUSE_CDS_ID ASC, CELLSITE_REF ASC, START_TIME ASC, HIST_STATUS_ID ASC";  }
+                else if (sortOrder.compareTo(SortOrder.STATUS)==0)
+                {   sQuery+="ORDER BY STATUS ASC, OUTAGE_TYPE ASC, CELLSITE_REF ASC, START_TIME ASC, HIST_STATUS_ID ASC";   }
+                log.info("Msg(57) Persistence.getHistoricalCascadeStatus() - the Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setCellsiteRef(o_ResultSet.getString("CELLSITE_REF"));
+                        isis.setLocation(o_ResultSet.getString("LOCATION"));
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setServiceGroup(o_ResultSet.getInt("SERVICE_GROUP"));
+                        isis.setStartTime(o_ResultSet.getTimestamp("START_TIME"));
+                    isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCauseCDSType(o_ResultSet.getString("CRITICALITY"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setEndTime(o_ResultSet.getTimestamp("END_TIME"));
+                        isis.setCDSId(o_ResultSet.getString("CDS_ID"));
+                        isis.setObjectType(o_ResultSet.getInt("OBJECT_TYPE"));
+                        isis.setCDSName(o_ResultSet.getString("CDS_NAME"));
+                        vectorReturned.add(isis);
+                        log.info("Msg(58) Persistence.getHistoricalCascadeStatus() - :"+((CDSStatus)vectorReturned.lastElement()).getCDSName()
+                            +" - Status: "+((CDSStatus)vectorReturned.lastElement()).getStatus()+" - StartTime: "
+                            +((CDSStatus)vectorReturned.lastElement()).getStartTime()+" - EndTime: "
+                            +((CDSStatus)vectorReturned.lastElement()).getEndTime());
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(59) Persistence.getHistoricalCascadeStatus() - SQLException"+e.toString());
+                    throw new ServiceViewException(e,"SQLException Error occured in getHistoricalCascadeStatus() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(60) Persistence.getHistoricalCascadeStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(61) Persistence.getHistoricalCascadeStatus() - SQLException"+e.toString());
+            throw new ServiceViewException(e,"SQLException Error occured in getHistoricalCascadeStatus() "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(62) Persistence.getHistoricalCascadeStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+/** Method name: getCurrentServiceStatus
+    A vector of Services is passed in as a vector of CDSStatus with the
+    parameters needed for the query. The vector can have 1 (all services) object
+    or several (particular services with id). Their current status is returned in
+    a new CDSStatus object in a new Vector.
+    */
+  public Vector getCurrentServiceStatus(Vector list,String sortOrder) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+
+        try
+        {
+            log.info("Msg(63) Persistence.getCurrentServiceStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(64) Persistence.getCurrentServiceStatus() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT SER.SERVICE_ID, SER.NAME, CUR.STATUS, CUR.OUTAGE_TYPE, CUR.TIMESTAMP, CUR.TIME_TO_FIX, "
+                    //1.2+"CUR.TIME_TO_FIX_UNITS, SER.COMMITMENT_TOTAL, SER.SERVICE_LEVEL_INDICATOR, nvl(CUR.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, "
+                    +" SER.COMMITMENT_TOTAL, SER.SERVICE_LEVEL_INDICATOR, nvl(CUR.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, "
+                    +"nvl(CUR.CAUSE_CDS_ID,' ') AS CAUSE_CDS_ID, nvl(SER.APN,' ') AS APN, nvl(SER.USER_NAME,' ') AS USER_NAME, SER.TYPE "
+                    +"FROM SV_CURRENT_STATUS CUR, SV_SERVICES_VIEW SER WHERE ";
+
+                if (list.size()==1&&((CDSStatus)list.get(0)).getCDSId()==null)
+                { //do nothing if there is no cdsid supplied
+                }
+                else
+                {
+                    sQuery+="CDS_ID IN (";
+                    for (int i=0;i<list.size() ;i++ )
+                    {
+                        if (i!=0)
+                        {
+                            sQuery+=",";
+                        }
+                        sQuery+="'"+((CDSStatus)list.get(i)).getCDSId()+"'";
+                    }
+                    sQuery+=") AND ";
+                }
+
+                sQuery+="OBJECT_TYPE="+CDSStatus.SERVICE+" AND CUR.PROVISION_STATUS>100 AND SER.SERVICE_ID=CUR.CDS_ID ";
+
+                if (((CDSStatus)list.get(0)).getServiceType().compareTo("NO_SERVICE_TYPE")!=0)
+                //same for no or any service type
+                {
+                    sQuery+="AND TYPE='"+((CDSStatus)list.get(0)).getServiceType()+"' ";
+                }
+                if (((CDSStatus)list.get(0)).getUserId().compareTo("NO_USER_ID")!=0)
+                {
+                    sQuery+="AND USER_ID='"+((CDSStatus)list.get(0)).getUserId()+"' ";
+                }
+                if (((CDSStatus)list.get(0)).getStatus()==StatusValues.NOT_AVAILABLE) //"Not available" in StatusValues
+                {
+                    sQuery+="AND STATUS!=1 ";
+                }
+                else if (((CDSStatus)list.get(0)).getStatus()!=StatusValues.ANY) //"Any" in StatusValues
+                {
+                    sQuery+="AND STATUS='"+((CDSStatus)list.get(0)).getStatus()+"' ";
+                }
+
+                if (sortOrder.compareTo(SortOrder.SERVICE_ID)==0)
+                {   sQuery+="ORDER BY SER.SERVICE_ID ASC";  }
+                else if (sortOrder.compareTo(SortOrder.SERVICE_NAME)==0)
+                {   sQuery+="ORDER BY SER.NAME ASC";    }
+                else if (sortOrder.compareTo(SortOrder.EST_TIME_EVENT)==0)
+                {   sQuery+="ORDER BY CUR.TIMESTAMP DESC, SER.NAME ASC";    }
+                else if (sortOrder.compareTo(SortOrder.COMMITMENT_POINTS)==0)
+                {   sQuery+="ORDER BY SER.COMMITMENT_TOTAL DESC, SER.NAME ASC"; }
+                else if (sortOrder.compareTo(SortOrder.CUSTOMER_NAME)==0)
+                {   sQuery+="ORDER BY SER.USER_NAME ASC, SER.NAME ASC"; }
+                else if (sortOrder.compareTo(SortOrder.FAILED_COMPONENT)==0)
+                {   sQuery+="ORDER BY CUR.CAUSE_CDS_ID ASC, SER.SERVICE_ID ASC";    }
+                else if (sortOrder.compareTo(SortOrder.STATUS)==0)
+                {   sQuery+="ORDER BY CUR.STATUS ASC, CUR.OUTAGE_TYPE ASC, SER.SERVICE_ID ASC"; }
+
+                log.info("Msg(65) Persistence.getCurrentServiceStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setServiceLevelIndicator(o_ResultSet.getInt("SERVICE_LEVEL_INDICATOR"));
+                        isis.setUserName(o_ResultSet.getString("USER_NAME"));
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setServiceType(o_ResultSet.getString("TYPE"));
+                        isis.setTimeStamp(o_ResultSet.getTimestamp("TIMESTAMP"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                    isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setAPN(o_ResultSet.getString("APN"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setCDSId(o_ResultSet.getString("SERVICE_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(66) Persistence.getCurrentServiceStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getCurrentServiceStatus "+e.getMessage());
+                }
+            }
+            else log.info("Msg(67) Persistence.getCurrentServiceStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(68) Persistence.getCurrentServiceStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getCurrentServiceStatus "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(69) Persistence.getCurrentServiceStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+  /** Method name: getCurrentDomainStatus
+    A Service is passed in as an CDSStatus with the
+    parameters needed for the query. The current status for each of the domains
+    related to this Service is returned in
+    a new CDSStatus object in a new Vector.
+    */
+  public Vector getCurrentDomainStatus(CDSStatus service) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(70) Persistence.getCurrentDomainStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(71) Persistence.getCurrentDomainStatus() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+       sQuery="SELECT CUR.SERVICE_GROUP, DOM.DOMAIN_ID, DOM.NAME, CUR.STATUS, "
+                    +"CUR.OUTAGE_TYPE, CUR.TIMESTAMP, CUR.TIME_TO_FIX, "
+                   //1.2 +"CUR.TIME_TO_FIX_UNITS, DOM.COMMITMENT_TOTAL, "
+                    +" DOM.COMMITMENT_TOTAL, "
+                    +"nvl(CUR.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, DOM.TYPE "
+                    +"FROM SV_CURRENT_STATUS CUR, SV_DOMAINS_VIEW DOM, SV_DOM_SERVICES_VIEW DOMSER WHERE "
+                    +"CUR.OBJECT_TYPE="+CDSStatus.DOMAIN+" AND CUR.PROVISION_STATUS>100 AND "
+                    +"DOMSER.SERVICE_ID='"+service.getCDSId()+"' AND "
+                    +"DOMSER.DOMAIN_ID=DOM.DOMAIN_ID AND DOMSER.DOMAIN_ID=CUR.CDS_ID ";
+
+                sQuery+="ORDER BY DOM.NAME ASC";
+                log.info("Msg(72) Persistence.getCurrentDomainStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setDomainType(o_ResultSet.getString("TYPE"));
+                        isis.setTimeStamp(o_ResultSet.getTimestamp("TIMESTAMP"));
+                        isis.setServiceGroup(o_ResultSet.getInt("SERVICE_GROUP"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCDSId(o_ResultSet.getString("DOMAIN_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        isis.setAPN(" ");
+                        isis.setCauseCDSId(" ");
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(73) Persistence.getCurrentDomainStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getCurrentDomainStatus "+e.getMessage());
+                }
+            }
+            else log.info("Msg(74) Persistence.getCurrentDomainStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(75) Persistence.getCurrentDomainStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getCurrentDomainStatus "+e.getMessage());
+        }
+        finally
+        {
+
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(76) Persistence.getCurrentDomainStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+    /** Method name: getCurrentComponentStatus
+    A Domain is passed in as an CDSStatus with the
+    parameters needed for the query. The current status for each of the
+    components related to this Domain is returned in
+    a new CDSStatus object in a new Vector.
+    */
+  public Vector getCurrentComponentStatus(CDSStatus domain) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(77) Persistence.getCurrentComponentStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(78) Persistence.getCurrentComponentStatus() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+           sQuery="SELECT CUR.SERVICE_GROUP, COMP.COMPONENT_ID, COMP.NAME, "
+                    +"NVL(CAS.STATUS,CUR.STATUS) STATUS, "
+                    +"NVL(CAS.OUTAGE_TYPE, CUR.OUTAGE_TYPE) OUTAGE_TYPE, "
+                    +"NVL(CAS.TIMESTAMP, CUR.TIMESTAMP) TIMESTAMP, "
+                    +"NVL(CAS.TIME_TO_FIX, CUR.TIME_TO_FIX) TIME_TO_FIX, "
+                    //1.2+"NVL(CAS.TIME_TO_FIX_UNITS, CUR.TIME_TO_FIX_UNITS) TIME_TO_FIX_UNITS, "
+                    +"COMP.COMMITMENT_TOTAL, "
+                    +"nvl(nvl(CAS.TROUBLE_TICKET_ID, CUR.TROUBLE_TICKET_ID),' ') AS TROUBLE_TICKET_ID, "
+                    +"nvl(nvl(CAS.CAUSE_CDS_ID, CUR.CAUSE_CDS_ID),' ') AS CAUSE_CDS_ID, "
+                    +"COMP.TYPE "
+                    +"FROM SV_CURRENT_STATUS CUR, SV_COMPONENTS_VIEW COMP, SV_COMP_DOMAINS_VIEW DOM, SV_CASCADE_STATUS CAS WHERE "
+                    +"CUR.OBJECT_TYPE="+CDSStatus.COMPONENT+" AND CUR.PROVISION_STATUS>100 "
+                    +"AND DOM.DOMAIN_ID='"+domain.getCDSId()+"' AND DOM.COMPONENT_ID = CUR.CDS_ID "
+                    +"AND DOM.COMPONENT_ID=COMP.COMPONENT_ID "
+                    +"and ( (cur.cds_type = 'Comms Hub' and cur.service_group = 3)  or "
+                    +"(cur.cds_type = 'CELLSITE' and cur.service_group = 1)  or "
+                    +"(cur.cds_type = 'RTR WAN' and cur.service_group = 3)  or "
+                    +"(cur.cds_type not in ('Comms Hub','CELLSITE', 'RTR WAN') ) ) "
+                    +"and cas.cds_id (+) = cur.cds_id "
+                    +"and cas.service_group (+) = cur.service_group";
+
+                sQuery+=" ORDER BY COMP.NAME ASC";
+                log.info("Msg(79) Persistence.getCurrentComponentStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setComponentType(o_ResultSet.getString("TYPE"));
+                        isis.setTimeStamp(o_ResultSet.getTimestamp("TIMESTAMP"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setServiceGroup(o_ResultSet.getInt("SERVICE_GROUP"));
+                        isis.setCDSId(o_ResultSet.getString("COMPONENT_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setAPN(" ");
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(80) Persistence.getCurrentComponentStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getCurrentComponentStatus() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(81) Persistence.getCurrentComponentStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(82) Persistence.getCurrentComponentStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getCurrentComponentStatus() "+e.getMessage());
+        }
+        finally
+        {
+
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(83) Persistence.getCurrentComponentStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+   /** Method name: getHistoricalServiceStatus
+    A vector of Services is passed in as a vector of CDSStatus with the
+    parameters needed for the query. The vector can have 1 (all services) object
+    or several (particular services with id). Their statuses between the
+    starttime and endtime provided are returned in
+    new CDSStatus objects in a new Vector.
+    */
+  public Vector getHistoricalServiceStatus(Vector list,String sortOrder) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(84) Persistence.getHistoricalServiceStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(85) Persistence.getHistoricalServiceStatus() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                java.sql.Date d1= new java.sql.Date(((CDSStatus)list.get(0)).getStartTime().getTime());//START_TIME date
+                java.sql.Time t1= new java.sql.Time(((CDSStatus)list.get(0)).getStartTime().getTime());//START_TIME time
+                java.sql.Date d2= new java.sql.Date(((CDSStatus)list.get(0)).getEndTime().getTime());//END_TIME date
+                java.sql.Time t2= new java.sql.Time(((CDSStatus)list.get(0)).getEndTime().getTime());//END_TIME time
+
+                //query
+                sQuery="SELECT SER.SERVICE_ID, SER.NAME, HIS.STATUS, HIS.OUTAGE_TYPE, HIS.START_TIME, HIS.TIME_TO_FIX, "
+//1.2                    +"HIS.TIME_TO_FIX_UNITS, HIS.COMMITMENT_TOTAL, HIS.SERVICE_LEVEL_INDICATOR, nvl(HIS.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, "
+                    +" HIS.COMMITMENT_TOTAL, HIS.SERVICE_LEVEL_INDICATOR, nvl(HIS.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, "
+                    +"nvl(HIS.CAUSE_CDS_ID,' ') AS CAUSE_CDS_ID, END_TIME, nvl(SER.APN,' ') AS APN, nvl(SER.USER_NAME,' ') AS USER_NAME, SER.TYPE "
+                    +"FROM SV_HISTORICAL_STATUS HIS, SV_SERVICES_VIEW SER WHERE ";
+
+                sQuery+="CDS_ID IN (";
+                for (int i=0;i<list.size() ;i++ )
+                {
+                    if (i!=0)
+                    {
+                        sQuery+=",";
+                    }
+                    sQuery+="'"+((CDSStatus)list.get(i)).getCDSId()+"'";
+                }
+                sQuery+=") AND OBJECT_TYPE="+CDSStatus.SERVICE+" AND HIS.PROVISION_STATUS>100 AND SER.SERVICE_ID=HIS.CDS_ID ";
+
+                if (((CDSStatus)list.get(0)).getServiceType().compareTo("NO_SERVICE_TYPE")!=0)
+                //same for no or any service type
+                {
+                    sQuery+="AND TYPE='"+((CDSStatus)list.get(0)).getServiceType()+"' ";
+                }
+                if (((CDSStatus)list.get(0)).getUserId().compareTo("NO_USER_ID")!=0)
+                {
+                    sQuery+="AND USER_ID='"+((CDSStatus)list.get(0)).getUserId()+"' ";
+                }
+                if (((CDSStatus)list.get(0)).getStatus()== StatusValues.NOT_AVAILABLE ) //"Not available" in StatusValues
+                {
+                    sQuery+="AND STATUS!=1 ";
+                }
+                else if (((CDSStatus)list.get(0)).getStatus()!= StatusValues.ANY) //"Any" in StatusValues
+                {
+                    sQuery+="AND STATUS='"+((CDSStatus)list.get(0)).getStatus()+"' ";
+                }
+
+                sQuery+=" AND (START_TIME <to_date('";//start time after the start time of first CDSStatus (all CDSStatus should have same start time in input)
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss') AND NVL(END_TIME,to_date('";
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss'))>to_date('";
+                sQuery+=d1.toString()+" "+t1.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss')) ";
+
+                if (sortOrder.compareTo(SortOrder.SERVICE_ID)==0)
+                {   sQuery+="ORDER BY SER.SERVICE_ID ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC "; }
+                else if (sortOrder.compareTo(SortOrder.SERVICE_NAME)==0)
+                {   sQuery+="ORDER BY SER.NAME ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC ";   }
+                else if (sortOrder.compareTo(SortOrder.EST_TIME_EVENT)==0)
+                {   sQuery+="ORDER BY HIS.START_TIME DESC, HIS.HIST_STATUS_ID DESC, SER.NAME ASC "; }
+                else if (sortOrder.compareTo(SortOrder.COMMITMENT_POINTS)==0)
+                {   sQuery+="ORDER BY nvl(HIS.COMMITMENT_TOTAL,0) DESC, SER.NAME ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC "; }
+                else if (sortOrder.compareTo(SortOrder.CUSTOMER_NAME)==0)
+                {   sQuery+="ORDER BY SER.USER_NAME ASC, SER.NAME ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC ";    }
+                else if (sortOrder.compareTo(SortOrder.FAILED_COMPONENT)==0)
+                {   sQuery+="ORDER BY HIS.CAUSE_CDS_ID ASC, SER.SERVICE_ID ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC ";   }
+                else if (sortOrder.compareTo(SortOrder.STATUS)==0)
+                {   sQuery+="ORDER BY HIS.STATUS ASC, HIS.OUTAGE_TYPE ASC,"
+                    +" SER.SERVICE_ID ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC ";    }
+
+                log.info("Msg(86) Persistence.getHistoricalServiceStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setServiceLevelIndicator(o_ResultSet.getInt("SERVICE_LEVEL_INDICATOR"));
+                        isis.setUserName(o_ResultSet.getString("USER_NAME"));
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setServiceType(o_ResultSet.getString("TYPE"));
+                        isis.setStartTime(o_ResultSet.getTimestamp("START_TIME"));
+                        isis.setEndTime(o_ResultSet.getTimestamp("END_TIME"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setAPN(o_ResultSet.getString("APN"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setCDSId(o_ResultSet.getString("SERVICE_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(87) Persistence.getHistoricalServiceStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getHistoricalServiceStatus "+e.getMessage());
+                }
+            }
+            else log.info("Msg(88) Persistence.getHistoricalServiceStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(89) Persistence.getHistoricalServiceStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getHistoricalServiceStatus "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(90) Persistence.getHistoricalServiceStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+/** Method name: getHistoricalDomainStatus
+    A Service is passed in as an CDSStatus with the
+    parameters needed for the query. The statuses between the
+    starttime and endtime provided for each of the domains
+    related to this Service are returned in
+    a new CDSStatus object in a new Vector.
+    */
+public Vector getHistoricalDomainStatus(CDSStatus service) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(91) Persistence.getHistoricalDomainStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(92) Persistence.getHistoricalDomainStatus() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+                java.sql.Date d1= new java.sql.Date(service.getStartTime().getTime());//START_TIME date
+                java.sql.Time t1= new java.sql.Time(service.getStartTime().getTime());//START_TIME time
+                java.sql.Date d2= new java.sql.Date(service.getEndTime().getTime());//END_TIME date
+                java.sql.Time t2= new java.sql.Time(service.getEndTime().getTime());//END_TIME time
+
+        sQuery="SELECT HIS.SERVICE_GROUP, DOM.DOMAIN_ID, DOM.NAME, HIS.STATUS, "
+                    +"HIS.OUTAGE_TYPE, HIS.START_TIME, HIS.TIME_TO_FIX, "
+                    //1.2+"HIS.TIME_TO_FIX_UNITS, HIS.COMMITMENT_TOTAL, "
+                    +" HIS.COMMITMENT_TOTAL, "
+                    +"nvl(HIS.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, END_TIME, DOM.TYPE "
+                    +"FROM SV_HISTORICAL_STATUS HIS, SV_DOMAINS_VIEW DOM, SV_DOM_SERVICES_VIEW WHERE "
+                    +"HIS.OBJECT_TYPE="+CDSStatus.DOMAIN+" AND HIS.PROVISION_STATUS>100 AND SV_DOM_SERVICES_VIEW.SERVICE_ID='"+service.getCDSId()
+                    +"' AND SV_DOM_SERVICES_VIEW.DOMAIN_ID=DOM.DOMAIN_ID "
+                    +"AND DOM.DOMAIN_ID=HIS.CDS_ID";
+
+                sQuery+=" AND (START_TIME <to_date('";//start time after the start time of first CDSStatus (all CDSStatus should have same start time in input)
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss') AND NVL(END_TIME,to_date('";
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss'))>to_date('";
+                sQuery+=d1.toString()+" "+t1.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss')) ";
+
+                sQuery+=" ORDER BY DOM.NAME ASC, START_TIME ASC, HIS.HIST_STATUS_ID ASC";
+
+                log.info("Msg(93) Persistence.getHistoricalDomainStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setDomainType(o_ResultSet.getString("TYPE"));
+                        isis.setStartTime(o_ResultSet.getTimestamp("START_TIME"));
+                        isis.setServiceGroup(o_ResultSet.getInt("SERVICE_GROUP"));
+                        isis.setEndTime(o_ResultSet.getTimestamp("END_TIME"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCDSId(o_ResultSet.getString("DOMAIN_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        isis.setAPN(" ");
+                        isis.setCauseCDSId(" ");
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(94) Persistence.getHistoricalDomainStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getHistoricalDomainStatus "+e.getMessage());
+                }
+            }
+            else log.info("Msg(95) Persistence.getHistoricalDomainStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(96) Persistence.getHistoricalDomainStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getHistoricalDomainStatus "+e.getMessage());
+        }
+        finally
+        {
+
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(97) Persistence.getHistoricalDomainStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+  /** Method name: getHistoricalComponentStatus
+    A Domain is passed in as an CDSStatus with the
+    parameters needed for the query. The statuses between the
+    starttime and endtime provided for each of the components
+    related to this Domain are returned in
+    a new CDSStatus object in a new Vector.
+    */
+  public Vector getHistoricalComponentStatus(CDSStatus domain) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned =new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(98) Persistence.getHistoricalComponentStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(99) Persistence.getHistoricalComponentStatus() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                java.sql.Date d1= new java.sql.Date(domain.getStartTime().getTime());//START_TIME date
+                java.sql.Time t1= new java.sql.Time(domain.getStartTime().getTime());//START_TIME time
+                java.sql.Date d2= new java.sql.Date(domain.getEndTime().getTime());//END_TIME date
+                java.sql.Time t2= new java.sql.Time(domain.getEndTime().getTime());//END_TIME time
+
+                sQuery="SELECT COM.COMPONENT_ID, COM.NAME, HIS.STATUS, "
+                    +"HIS.OUTAGE_TYPE, HIS.START_TIME, HIS.TIME_TO_FIX, "
+                    //1.2+"HIS.TIME_TO_FIX_UNITS, HIS.COMMITMENT_TOTAL, "
+                    +" HIS.COMMITMENT_TOTAL, "
+                    +"nvl(HIS.TROUBLE_TICKET_ID,' ') AS TROUBLE_TICKET_ID, END_TIME, "
+                    +"nvl(HIS.CAUSE_CDS_ID,' ') AS CAUSE_CDS_ID, COM.TYPE "
+                    +"FROM SV_HISTORICAL_STATUS HIS, SV_COMPONENTS_VIEW COM, SV_COMP_DOMAINS_VIEW WHERE "
+                    +"HIS.OBJECT_TYPE="+CDSStatus.COMPONENT+" AND HIS.PROVISION_STATUS>100 "
+                    +"AND SV_COMP_DOMAINS_VIEW.DOMAIN_ID='"+domain.getCDSId()
+                    +"' AND SV_COMP_DOMAINS_VIEW.COMPONENT_ID=COM.COMPONENT_ID "
+                    +"AND COM.COMPONENT_ID=HIS.CDS_ID";
+
+                sQuery+=" AND HIS.CDS_TYPE != 'CELLSITE'"
+                     +" AND ( (HIS.CDS_TYPE = 'CELLSITECASCADE' AND HIS.SERVICE_GROUP = 1 ) OR"
+                     +" (HIS.CDS_TYPE = 'Comms Hub' AND HIS.SERVICE_GROUP = 3) OR"
+                     +" (HIS.CDS_TYPE = 'RTR WAN' AND HIS.SERVICE_GROUP = 3)  OR "
+                     +" (HIS.CDS_TYPE NOT IN ('CELLSITECASCADE','Comms Hub', 'RTR WAN') ) )";
+
+                sQuery+=" AND (START_TIME <to_date('"; //start time after the start time of first CDSStatus (all CDSStatus should have same start time in input)
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss') AND NVL(END_TIME,to_date('";
+                sQuery+=d2.toString()+" "+t2.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss'))>to_date('";
+                sQuery+=d1.toString()+" "+t1.toString();
+                sQuery+="','yyyy-mm-dd hh24:mi:ss')) ";
+
+                sQuery+=" ORDER BY COM.NAME ASC, HIS.START_TIME ASC, HIS.HIST_STATUS_ID ASC";
+
+                log.info("Msg(100) Persistence.getHistoricalComponentStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    while (o_ResultSet.next()!=false)
+                    {
+                        CDSStatus isis= new CDSStatus ();
+                        isis.setStatus(o_ResultSet.getInt("STATUS"));
+                        isis.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        isis.setComponentType(o_ResultSet.getString("TYPE"));
+                        isis.setStartTime(o_ResultSet.getTimestamp("START_TIME"));
+                        isis.setEndTime(o_ResultSet.getTimestamp("END_TIME"));
+                        isis.setTimeToFix(o_ResultSet.getString("TIME_TO_FIX"));
+//1.2                        isis.setTimeToFixUnits(o_ResultSet.getInt("TIME_TO_FIX_UNITS"));
+                        isis.setCommitmentTotal(o_ResultSet.getInt("COMMITMENT_TOTAL"));
+                        isis.setTroubleTicketId(o_ResultSet.getString("TROUBLE_TICKET_ID"));
+                        isis.setCDSId(o_ResultSet.getString("COMPONENT_ID"));
+                        isis.setCDSName(o_ResultSet.getString("NAME"));
+                        isis.setCauseCDSId(o_ResultSet.getString("CAUSE_CDS_ID"));
+                        isis.setAPN(" ");
+                        vectorReturned.add(isis);
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(102) Persistence.getHistoricalComponentStatus - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getHistoricalComponentStatus "+e.getMessage());
+                }
+            }
+            else log.info("Msg(103) Persistence.getHistoricalComponentStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(104) Persistence.getHistoricalComponentStatus - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getHistoricalComponentStatus "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(105) Persistence.getHistoricalComponentStatus() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+    /** Method name: validateUserId
+    Checks that the supplied user id exists. If it does, the method returns true, otherwise it returns false.
+       Need to check for Provision Status >100 in the Services view.
+    */
+   public boolean validateUserId(String userId) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        boolean o_Answer=false;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(106) Persistence.validateUserId() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(107) Persistence.validateUserId() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+                //query
+                sQuery="SELECT USER_ID FROM SV_SERVICES_VIEW WHERE "
+                    + "USER_ID='"+userId+"' AND PROVISION_STATUS>100 ";
+
+                log.info("Msg(108)  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(109) Persistence.validateUserId() - the resultset is not null");
+                        o_Answer=true;
+                    }
+                    else
+                    {
+                        log.info("Msg(110) Persistence.validateUserId() - the resultset is null");
+                        o_Answer=false;
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(111) Persistence.validateUserId() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateUserId "+e.getMessage());
+                }
+            }
+            else log.info("Msg(112) Persistence.validateUserId() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(113) Persistence.validateUserId() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateUserId "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(114) Persistence.validateUserId() - Connection returned");
+        }
+        return o_Answer;
+   }
+
+    /** Method name: validateServiceType
+    Checks that the supplied service type exists. If it does, the method returns true, otherwise it returns false.
+       Need to check for Provision Status >100 in the Services view.
+    */
+   public boolean validateServiceType(String serviceType) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        boolean o_Answer=false;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(115) Persistence.validateServiceType() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(116) Persistence.validateServiceType() - Connection established");
+
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT TYPE FROM SV_SERVICES_VIEW WHERE "
+                    + "TYPE='"+serviceType+"' AND PROVISION_STATUS>100 AND ROWNUM < 2";
+
+                log.info("Msg(117)  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(118) Persistence.validateServiceType() - the resultset is not null");
+                        o_Answer=true;
+                    }
+                    else
+                    {
+                        log.info("Msg(119) Persistence.validateServiceType() - the resultset is null");
+                        o_Answer=false;
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(120) Persistence.validateServiceType() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateServiceType "+e.getMessage());
+                }
+            }
+            else log.info("Msg(121) Persistence.validateServiceType() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(122) Persistence.validateServiceType() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateServiceType "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(123) Persistence.validateServiceType() - Connection returned");
+        }
+        return o_Answer;
+   }
+
+    /** Method name: validateUserName
+    Checks for a matching User name in the DB.
+    If there is a direct match with the user name in the service view, the method will return a Vector
+    object containing only one User object. The user object will contain the user id.
+    If there is not a direct match, the returned Vector object will contain a list of User objects containing
+    the user names that nearly match the user name.
+    */
+   public Vector validateUserName(String userName) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        String sQuery2="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned=new Vector();
+        User o_user=null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(124) Persistence.validateUserName() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(125) Persistence.validateUserName() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT USER_NAME, USER_ID FROM SV_SERVICES_VIEW WHERE "
+                    + "USER_NAME='"+userName+"' AND PROVISION_STATUS>100"
+                    + " ORDER BY USER_NAME ASC";
+
+                sQuery2="SELECT DISTINCT USER_NAME, USER_ID FROM SV_SERVICES_VIEW WHERE "
+                    + "(SOUNDEX(USER_NAME)=SOUNDEX('"+userName+"') "
+                    + "OR (upper(USER_NAME) LIKE '%'||upper('"
+                    + userName +"')||'%')) AND PROVISION_STATUS>100"
+                    + " ORDER BY USER_NAME ASC";
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    log.info("Msg(126)  Query: "+sQuery);
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    //if there is one result
+                    if (o_ResultSet.next()!=false)
+                    {
+                        o_user=new User();
+                        log.info("Msg(127) Persistence.validateUserName() - the resultset is not null - exact match");
+                        o_user.setUserName(o_ResultSet.getString("USER_NAME"));
+                        o_user.setUserId(o_ResultSet.getString("USER_ID"));
+                        vectorReturned.add(o_user);
+                        log.info("Msg(128) Persistence.validateUserName() - Vector returned: UserId:"
+                        +((User)vectorReturned.get(0)).getUserId()
+                        +" UserName:"+((User)vectorReturned.get(0)).getUserName());
+
+                    }
+                    //if there is no result
+                    else
+                    {
+                        log.info("Msg(129)  Query: "+sQuery2);
+                        log.info("Msg(130) Persistence.validateUserName() - the resultset is null - no exact match");
+                        o_ResultSet=o_Statement.executeQuery(sQuery2);
+
+                        //if there are result(s)
+                        while (o_ResultSet.next()!=false)
+                        {
+                            log.info("Msg(131) Persistence.validateUserName() - the resultset is not null - there are possible matchs");
+                            o_user=new User();
+                            o_user.setUserName(o_ResultSet.getString("USER_NAME"));
+                            o_user.setUserId(o_ResultSet.getString("USER_ID"));
+                            vectorReturned.add(o_user);
+                            log.info("Msg(132) Persistence.validateUserName() - the user name "+o_user.getUserName());
+                        }
+                        log.info("Msg(133) Persistence.validateUserName() - Vector returned of size "+ vectorReturned.size());
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(134) Persistence.validateUserName() - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateUserName() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(135) Persistence.validateUserName() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(136) Persistence.validateUserName() - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateUserName() "+e.getMessage());
+        }
+        finally
+        {
+
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(137) Persistence.validateUserName() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+    /** Method name: validateUserAndService
+    Checks that the supplied service type and user id are linked.
+    If they do, the method returns true, otherwise it returns false.
+       Need to check for Provision Status >100 in the Services view.
+    */
+   public boolean validateUserAndService(String serviceType,String userId) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        boolean o_Answer=false;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(138) Persistence.validateUserAndService() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(139) Persistence.validateUserAndService() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT USER_ID, TYPE FROM SV_SERVICES_VIEW WHERE "
+                    + "USER_ID='"+userId+"' AND TYPE='"+serviceType+"' AND PROVISION_STATUS>100 ";
+
+                log.info("Msg(140)  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(141) Persistence.validateUserAndService() - the resultset is not null");
+                        o_Answer=true;
+                    }
+                    else
+                    {
+                        log.info("Msg(142) Persistence.validateUserAndService() - the resultset is null");
+                        o_Answer=false;
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(143) Persistence.validateUserAndService() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateUserAndService "+e.getMessage());
+                }
+            }
+            else log.info("Msg(144) Persistence.validateUserAndService() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(145) Persistence.validateUserAndService() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateUserAndService "+e.getMessage());
+        }
+        finally
+        {
+
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(146) Persistence.validateUserAndService() - Connection returned");
+        }
+        return o_Answer;
+   }
+
+     /** Method name: validateServiceName
+    Checks that the supplied service name, service type and user id are linked.
+    If they do, the method returns one Service in a vector, otherwise it
+    returns names that nearly match the service name but have service type and
+    user id correct. If there is still no match, an empty vector is returned.
+    Need to check for Provision Status >100 in the Services view.
+    */
+   public Vector validateServiceName(String serviceName,String serviceType,String userId) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        String sQuery2="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector vectorReturned=new Vector();
+        Service o_service=null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(147) Persistence.validateServiceName() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(148) Persistence.validateServiceName() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+                //query
+                sQuery="SELECT SERVICE_ID, NAME, TYPE, USER_ID FROM SV_SERVICES_VIEW WHERE "
+                    +" NAME='"+serviceName+"' AND PROVISION_STATUS>100";
+                if (serviceType.compareTo("NO_SERVICE_TYPE")!=0)//same String if there is no service type or any
+                {
+                    sQuery+=" AND TYPE='"+serviceType+"' ";
+                }
+                if (userId.compareTo("NO_USER_ID")!=0)
+                {
+                    sQuery+=" AND USER_ID='"+userId+"' ";
+                }
+                sQuery+=" ORDER BY NAME ASC";
+
+                sQuery2="SELECT DISTINCT SERVICE_ID, NAME, TYPE, USER_ID FROM SV_SERVICES_VIEW WHERE "
+                    + "(SOUNDEX(NAME)=SOUNDEX('"+serviceName+"') OR (upper(NAME) LIKE '%'||"
+                    + "upper('"+serviceName +"')||'%')) AND PROVISION_STATUS>100 ";
+                if (serviceType.compareTo("NO_SERVICE_TYPE")!=0)//same String if there is no service type or any
+                {
+                    sQuery2+=" AND TYPE='"+serviceType+"' ";
+                }
+                if (userId.compareTo("NO_USER_ID")!=0)
+                {
+                    sQuery2+=" AND USER_ID='"+userId+"' ";
+                }
+                sQuery2+=" ORDER BY NAME ASC";
+
+                log.info("Msg(150) Query "+sQuery);
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    //if there is one result
+                    if (o_ResultSet.next()!=false)
+                    {
+                        o_service=new Service();
+                        log.info("Msg(151) Persistence.validateServiceName() - the resultset is not null - exact match");
+                        o_service.setServiceName(o_ResultSet.getString("NAME"));
+                        o_service.setServiceId(o_ResultSet.getString("SERVICE_ID"));
+                        vectorReturned.add(o_service);
+                        log.info("Msg(152) Persistence.validateServiceName() - Vector returned: ServiceId:"
+                        +((Service)vectorReturned.get(0)).getServiceId()
+                        +" ServiceName:"+((Service)vectorReturned.get(0)).getServiceName());
+                    }
+                    //if there is no result
+                    else
+                    {
+                        log.info("Msg(153)  Query: "+sQuery2);
+                        log.info("Msg(154) Persistence.validateServiceName() - the resultset is null - no exact match");
+                        o_ResultSet=o_Statement.executeQuery(sQuery2);
+
+                        //if there are result(s)
+                        while (o_ResultSet.next()!=false)
+                        {
+                            log.info("Msg(155) Persistence.validateServiceName() - the resultset is not null - there are possible matchs");
+                            o_service=new Service();
+                            o_service.setServiceName(o_ResultSet.getString("NAME"));
+                            o_service.setServiceId(o_ResultSet.getString("SERVICE_ID"));
+                            vectorReturned.add(o_service);
+                            log.info("Msg(156) Persistence.validateServiceName() - the service name "+o_service.getServiceName());
+                        }
+                        log.info("Msg(157) Persistence.validateServiceName() - Vector returned of size "+ vectorReturned.size());
+                    }
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(158) Persistence.validateServiceName() - a connection couldn't be established - SQLException"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateServiceName() "+e.getMessage());
+                }
+            }
+            else log.info("Msg(159) Persistence.validateServiceName() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(160) Persistence.validateServiceName() - a connection couldn't be established - SQLException"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateServiceName() "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(161) Persistence.validateServiceName() - Connection returned");
+        }
+        return vectorReturned;
+   }
+
+    /** Method name: validateServiceId
+    Checks that the supplied service id,service type and user id are linked.
+    If they do, the method returns true, otherwise it returns false.
+       Need to check for Provision Status >100 in the Services view.
+    */
+   public boolean validateServiceId(String serviceId,String serviceType,String userId) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        boolean o_Answer=false;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(162) Persistence.validateServiceId() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(163) Persistence.validateServiceId() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT USER_ID, TYPE, SERVICE_ID FROM SV_SERVICES_VIEW WHERE "
+                    + "SERVICE_ID='"+serviceId+"' AND PROVISION_STATUS>100 ";
+
+                if (serviceType.compareTo("NO_SERVICE_TYPE")!=0)//same String if there is no service type or any
+                {
+                    sQuery+=" AND TYPE='"+serviceType+"' ";
+                }
+                if (userId.compareTo("NO_USER_ID")!=0)
+                {
+                    sQuery+=" AND USER_ID='"+userId+"' ";
+                }
+
+                log.info("Msg(164)  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        log.info("Msg(165) Persistence.validateServiceId() - the resultset is not null");
+                        o_Answer=true;
+                    }
+                    else
+                    {
+                        log.info("Msg(166) Persistence.validateServiceId() - the resultset is null");
+                        o_Answer= false;
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(167) Persistence.validateServiceId() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in validateServiceId "+e.getMessage());
+                }
+            }
+            else log.info("Msg(168) Persistence.validateServiceId() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(169) Persistence.validateServiceId() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in validateServiceId "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(170) Persistence.validateServiceId() - Connection returned");
+        }
+        return o_Answer;
+   }
+
+    /** Method name: getSenderDetails
+    Returns the details for the sender of a message
+    */
+   public Contact getSenderDetails () throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Contact isis=new Contact();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(171) Persistence.getSenderDetails() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(172) Persistence.getSenderDetails() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT EMAIL, SMS, FAX FROM SV_SENDER_VIEW WHERE SENDER_ID = 'ISIS'";
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+                    if (o_ResultSet.next()!=false)
+                    {
+                        isis.setEMail(o_ResultSet.getString("EMAIL"));
+                        isis.setFax(o_ResultSet.getString("FAX"));
+                        isis.setSMS(o_ResultSet.getString("SMS"));
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(173) Persistence.getSenderDetails() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getSenderDetails "+e.getMessage());
+                }
+            }
+            else log.info("Msg(174) Persistence.getSenderDetails() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(175) Persistence.getSenderDetails() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getSenderDetails "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(176) Persistence.getSenderDetails() - Connection returned");
+        }
+        return isis;
+   }
+
+   public void deleteRecalcData(String cdsId,String objectType) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg() Persistence.deleteRecalcData() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg() Persistence.deleteRecalcData() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="DELETE FROM SV_RECALC WHERE CDS_ID='"+cdsId+"' AND OBJECT_TYPE="+Integer.parseInt(objectType);
+
+                log.info("Msg()  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg() Persistence.deleteRecalcData() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getRecalcData "+e.getMessage());
+                }
+            }
+            else log.info("Msg() Persistence.deleteRecalcData() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg() Persistence.deleteRecalcData() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getRecalcData "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg() Persistence.deleteRecalcData() - Connection returned");
+        }
+   }
+
+   public Vector getRecalcData() throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Vector o_Vector=new Vector();
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg() Persistence.getRecalcData() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg() Persistence.getRecalcData() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT CDS_ID, OBJECT_TYPE FROM SV_RECALC ";
+
+                log.info("Msg()  Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+                    while (o_ResultSet.next()!=false)
+                    {
+                        Recalc isis=new Recalc();
+                        isis.setCDSId(o_ResultSet.getString("CDS_ID"));
+                        isis.setObjectType(o_ResultSet.getInt("OBJECT_TYPE"));
+                        o_Vector.add(isis);
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg() Persistence.getRecalcData() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getRecalcData "+e.getMessage());
+                }
+            }
+            else log.info("Msg() Persistence.getRecalcData() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg() Persistence.getRecalcData() - an SQLException is thrown"+e);
+            throw new ServiceViewException(e,"SQLException Error occured in getRecalcData "+e.getMessage());
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close resultset: " + sqle.getMessage() );
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                throw new ServiceViewException( sqle, "Could not close statment: " + sqle.getMessage() );
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg() Persistence.getRecalcData() - Connection returned");
+        }
+        return o_Vector;
+   }
+
+   public CDSStatus getCurrentStatus (CDSStatus findstatus) throws ServiceViewException
+   {
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        Statement o_Statement=null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(177) Persistence.getCurrentStatus() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(178) Persistence.getCurrentStatus() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT STATUS, TIMESTAMP, CDS_NAME, OUTAGE_TYPE "
+                    +"FROM SV_CURRENT_STATUS WHERE ";
+
+                sQuery+="CDS_ID='"+findstatus.getCDSId()+"' ";
+
+                sQuery+="AND OBJECT_TYPE="+findstatus.getObjectType()+" ";
+
+                if (findstatus.getServiceType()!=null)
+                {
+                    sQuery+="AND CDS_TYPE='"+findstatus.getServiceType()+"' ";
+                }
+                else if (findstatus.getDomainType()!=null)
+                {
+                    sQuery+="AND CDS_TYPE='"+findstatus.getDomainType()+"' ";
+                }
+                else
+                {
+                    throw new ServiceViewException(" Error in the query in getCurrentServiceStatus, cds_type not valid ");
+                }
+
+
+                log.info("Msg(179) Persistence.getCurrentStatus - Query: "+sQuery);
+
+                //run the query
+                try
+                {
+                    o_Statement=oracleConnection.createStatement();
+                    o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                    if (o_ResultSet.next()!=false)
+                    {
+                        findstatus.setStatus(o_ResultSet.getInt("STATUS"));
+                        findstatus.setOutageType(o_ResultSet.getInt("OUTAGE_TYPE"));
+                        findstatus.setTimeStamp(o_ResultSet.getTimestamp("TIMESTAMP"));
+                        findstatus.setCDSName(o_ResultSet.getString("CDS_NAME"));
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(180) Persistence.getCurrentStatus - a connection couldn't be established - SQLException"+e);
+                }
+            }
+            else log.info("Msg(181) Persistence.getCurrentStatus() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(181) Persistence.getCurrentStatus - a connection couldn't be established - SQLException"+e);
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(182) Persistence.getCurrentStatus() - Connection returned");
+        }
+        return findstatus;
+   }
+
+
+
+
+public Customer getCustomer(String msisdn, String imsi) throws ServiceViewException
+{
+        //check login name and password
+        String sQuery="";
+        ResultSet o_ResultSet=null;
+        PreparedStatement o_Statement=null;
+        Customer cusRet = null;
+        Connection oracleConnection = null;
+
+        try
+        {
+            log.info("Msg(171) Persistence.getCustomer() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(172) Persistence.getCustomer() - Connection established");
+
+            if(oracleConnection!=null)
+            {
+
+                //query
+                sQuery="SELECT id, imsi, msisdn, hlr, oss FROM CS_CUSTOMER_VIEW WHERE ";
+
+              if(msisdn != null && msisdn.length() != 0)
+              {
+                 sQuery = sQuery + " msisdn= ? ";
+              }
+              else if(imsi != null && imsi.length() != 0)
+              {
+                 sQuery = sQuery + " imsi = ? ";
+              }
+
+            //run the query
+            try
+            {
+            o_Statement=oracleConnection.prepareStatement(sQuery);
+
+
+              if(msisdn != null && msisdn.length() != 0)
+              {
+                        o_Statement.setString(1,msisdn);
+              }
+              else if(imsi != null && imsi.length() != 0)
+              {
+                        o_Statement.setString(1,imsi);
+              }
+
+
+
+            o_ResultSet=o_Statement.executeQuery();
+
+            if (o_ResultSet.next()!=false)
+                {
+
+     cusRet = new Customer(o_ResultSet.getString("id"),
+			   o_ResultSet.getString("msisdn"),
+                           o_ResultSet.getString("imsi"),
+                           o_ResultSet.getString("hlr"),
+                           o_ResultSet.getString("oss"));
+
+                    }
+
+                }
+                catch (SQLException e)
+                {
+                    log.info("Msg(173) Persistence.getCustomer() - an SQLException is thrown"+e);
+                }
+            }
+            else log.info("Msg(174) Persistence.getCustomer() - Connection null");
+        }
+        catch (SQLException e)
+        {
+            log.info("Msg(175) Persistence.getCustomer() - an SQLException is thrown"+e);
+        }
+        finally
+        {
+            //Close resultset
+            try
+            {
+                if( o_ResultSet != null )
+                {
+                    o_ResultSet.close();
+                }
+
+            }
+            catch( SQLException sqle )
+            {
+            }
+
+            //Close statement
+            try
+            {
+                if( o_Statement != null )
+                {
+                    o_Statement.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+            }
+
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(176) Persistence.getCustomer() - Connection returned");
+        }
+        return cusRet;
+
+}
+
+public void errorMessage(String errMsg) 
+{
+    Connection oracleConnection = null;
+
+     String strSQL = "insert into cv_errors(errmsg, errortime)  ";
+            strSQL += " values(?, sysdate)";
+
+    PreparedStatement pstmt = null;
+
+        try
+        {
+            log.info("Msg(171) Persistence.errorMessage() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(172) Persistence.errorMessage() - Connection established");
+
+            pstmt = oracleConnection.prepareStatement(strSQL);
+
+            pstmt.setString(1, errMsg);
+
+            // Insert the row
+            pstmt.executeUpdate();
+        }
+        catch(Exception e)
+        {
+            log.info("Msg(171) Persistence.errorMessage() -Error in errorMessage: " +e.toString());
+        }
+        finally
+        {
+            //Close statement
+            try
+            {
+                if( pstmt != null )
+                {
+                    pstmt.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(176) Persistence.errorMessage() - Connection returned");
+        }
+}
+
+public void addCustomer(Customer newCust) throws Exception
+{
+    Connection oracleConnection = null;
+
+     String strSQL = "insert into cv_customer(customer_id, msisdn, ";
+            strSQL += "imsi, last_change, hlr) values ";
+            strSQL += "(CV_ID_SEQ.nextval, ?, ?, ";
+            strSQL += "sysdate, ?)";
+
+    PreparedStatement pstmt = null;
+
+        try
+        {
+            log.info("Msg(171) Persistence.addCustomer() - Request for a connection");
+            oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+            log.info("Msg(172) Persistence.addCustomer() - Connection established");
+
+            pstmt = oracleConnection.prepareStatement(strSQL);
+
+            pstmt.setString(1, newCust.getMsisdn());
+            pstmt.setString(2, newCust.getImsi());
+            pstmt.setString(3, newCust.getHLR());
+
+            // Insert the row
+            pstmt.executeUpdate();
+        }
+        catch(Exception e)
+        {
+            throw e;
+        }
+        finally
+        {
+            //Close statement
+            try
+            {
+                if( pstmt != null )
+                {
+                    pstmt.close();
+                }
+            }
+            catch( SQLException sqle )
+            {
+                log.error("Could not close statment: " + sqle.getMessage() );
+            }
+            PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+            log.info("Msg(176) Persistence.addCustomer() - Connection returned");
+        }
+    }
+
+public void updateCustomer(Customer newCust) throws Exception
+{
+    Connection oracleConnection = null;
+
+
+    String strSQL = "UPDATE cv_customer ";
+           strSQL += "set hlr=?, imsi=? ";
+           strSQL += "WHERE customer_id = ? AND msisdn = ?";
+
+    PreparedStatement o_Statement = null;
+
+    try
+    {
+        log.info("Msg(171) Persistence.updateCustomer() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.updateCustomer() - Connection established");
+
+        o_Statement = oracleConnection.prepareStatement(strSQL);
+        log.info("Msg(172) Persistence.updateCustomer() - trying: " + strSQL);
+
+
+         log.info(newCust.getImsi() + " " + newCust.getHLR() + " " +
+	   newCust.getMsisdn() + " " + newCust.getId());
+
+        String hlr  = newCust.getHLR();
+        o_Statement.setString(1, hlr);
+        String imsi = newCust.getImsi();
+        o_Statement.setString(2, imsi);
+        long id = Long.parseLong(newCust.getId());
+        o_Statement.setLong(3, id);
+        String msisdn = newCust.getMsisdn();
+        o_Statement.setString(4, msisdn);
+
+        log.info("Msg(172) Persistence.updateCustomer() - Connection established");
+
+     // Insert the row
+        o_Statement.executeUpdate();
+
+
+    }
+    catch(Exception e)
+    {
+    				throw e;
+    }
+    finally
+    {
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.updateCustomer() - Connection returned");
+    }
+}
+public void setAPNS(Vector apns) throws Exception
+{
+    ResultSet o_ResultSet=null;
+    PreparedStatement o_Statement2=null;
+    PreparedStatement o_Statement1=null;
+    PreparedStatement o_Statement=null;
+    int recordCount=0;
+    Connection oracleConnection = null;
+
+ String sQuery = "select count(*) As anyapn FROM cv_component_lookup where no = ? ";
+
+    try
+    {
+        log.info("Msg(171) Persistence.setAPNS() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.setAPNS() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+            //run the query
+            try
+            {
+                o_Statement=oracleConnection.prepareStatement(sQuery);
+
+                sQuery = "UPDATE cv_component_lookup set name = ? ";
+                sQuery+= "where no = ? and component_type = 'APN' ";
+                o_Statement1=oracleConnection.prepareStatement(sQuery);
+
+         sQuery = "insert into cv_component_lookup(name, no, component_type, last_update) ";
+	 sQuery+= "values(?, ?, 'APN', sysdate) ";
+
+
+                o_Statement2=oracleConnection.prepareStatement(sQuery);
+
+
+                for(int i=0; i < apns.size(); i++)
+                {
+
+
+		  try
+		  {
+
+                    NetworkComponent tmp = (NetworkComponent) apns.get(i);
+		    String apnid = tmp.getNo();
+                    o_Statement.setString(1, tmp.getNo());
+
+                    o_ResultSet = o_Statement.executeQuery();
+
+                    if (o_ResultSet.next()!=false)
+		    {
+                        if(o_ResultSet.getInt("anyapn") > 0)
+			{
+
+                             o_Statement1.setString(1, tmp.getName());
+                             o_Statement1.setString(2, apnid );
+                             o_Statement1.executeUpdate();
+
+			}
+			else
+			{
+
+                             o_Statement2.setString(1, tmp.getName());
+                             o_Statement2.setString(2, apnid );
+                             o_Statement2.executeUpdate();
+
+			}
+                    }
+
+		    }
+		    catch(Exception e)
+		    {
+
+                      // Only log errors don't throw
+		      log.error("Error in setAPNS " + e.toString());
+		    }
+
+
+
+                }
+            }
+            catch (SQLException e)
+            {
+                    log.info("Msg(173) Persistence.setAPNS() - an SQLException is thrown"+e);
+            }
+        }
+        else log.info("Msg(174) Persistence.setAPNS() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.setAPNS() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() );
+        }
+
+        //Close statement
+        try
+        {
+            if( o_Statement1 != null )
+            {
+                o_Statement1.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        try
+        {
+            if( o_Statement2 != null )
+            {
+                o_Statement2.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.setAPNS() - Connection returned");
+    }
+
+
+}
+
+public Vector getAPNStatus(Vector apnIds, Boolean refreshHLR) throws Exception
+{
+    ResultSet o_ResultSet=null;
+    Statement o_Statement=null;
+    Vector o_apn = new Vector();
+    int recordCount=0;
+    Connection oracleConnection = null;
+
+        log.info("Msg(171) Persistence.getAPNStatus() - Building SQL");
+
+ String sQuery = "select cal.name, Decode(ser.status, null, 0, ser.status) as status, cal.no ";
+    sQuery +=       "from ";
+    sQuery +=       " cs_all_apn_status_view ser , cv_component_lookup cal where ";
+    sQuery +=       " cal.name = ser.apn (+)";
+    sQuery +=       " and cal.component_type  = 'APN' ";
+    sQuery +=       " and cal.no IN (";
+
+    try
+    {
+
+   log.info("Msg(171) Persistence.getAPNStatus() - Number of APNS: " + apnIds.size());
+
+     if(apnIds == null || apnIds.size()==0)
+     {
+         log.info("getAPNStatus : No apns passed");
+	 return o_apn;
+
+     }
+
+    for (int i=0;i<apnIds.size() ;i++ )
+    {
+        if (i!=0)
+        {
+            sQuery+=",";
+        }
+        sQuery+="'"+((String)apnIds.get(i)).toString()+"'";
+    }
+    sQuery += ")";
+
+         log.info("getAPNStatus : SQL: " + sQuery);
+
+        log.info("Msg(171) Persistence.getAPNStatus() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.getAPNStatus() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+            //run the query
+            try
+            {
+                o_Statement=oracleConnection.createStatement();
+                o_ResultSet=o_Statement.executeQuery(sQuery);
+
+                while(o_ResultSet.next()!=false)
+                {
+		    recordCount++;
+
+    NetworkComponent newApn = new NetworkComponent(o_ResultSet.getString("name"),"APN", o_ResultSet.getString("no"),
+    STATUS_TYPE_VALUES[ Integer.parseInt(o_ResultSet.getString("status"))]);
+
+
+         o_apn.add(newApn);
+                }
+            }
+            catch (SQLException e)
+            {
+                    log.info("Msg(173) Persistence.getAPNStatus() - an SQLException is thrown"+e);
+                    throw new ServiceViewException(e,"SQLException Error occured in getAPNStatus"+e.getMessage());
+            }
+        }
+        else log.info("Msg(174) Persistence.getAPNStatus() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.getAPNStatus() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() );
+        }
+
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.getAPNStatus() - Connection returned");
+    }
+
+    if(recordCount < apnIds.size())
+    {
+       refreshHLR = new Boolean(true);
+       errorMessage("APNS missing: " + sQuery);
+    }
+
+    return o_apn;
+}
+
+public NetworkComponent getMSCStatus(String msc) throws Exception
+{
+    //check login name and password
+    String sQuery="";
+    ResultSet o_ResultSet=null;
+    PreparedStatement o_Statement=null;
+    NetworkComponent mscRet = null;
+    Connection oracleConnection = null;
+
+    try
+    {
+        log.info("Msg(171) Persistence.getMSCStatus() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.getMSCStatus() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+
+            //query
+          sQuery="SELECT cds_id, status, ccl.no FROM SV_CURRENT_STATUS scs ";
+          sQuery+=", CV_COMPONENT_LOOKUP ccl WHERE ";
+          sQuery+=" scs.cds_id = ccl.name and ccl.no = ? ";
+
+            //run the query
+            try
+            {
+        log.info("Msg(172) Persistence.getMSCStatus() - Prepared");
+                o_Statement=oracleConnection.prepareStatement(sQuery);
+
+                if(msc != null && msc.length() != 0)
+                {
+                    o_Statement.setString(1,msc);
+                }
+		else
+		{
+                   log.error("No MSC value passed");
+		   return null;
+		}
+        log.info("Msg(172) Persistence.getMSCStatus() - Execute");
+                o_ResultSet=o_Statement.executeQuery();
+
+                if (o_ResultSet.next()!=false)
+                {
+     mscRet = new NetworkComponent(o_ResultSet.getString("cds_id"),"MSC",
+		  o_ResultSet.getString("no"),
+    STATUS_TYPE_VALUES[ Integer.parseInt(o_ResultSet.getString("status"))]);
+
+                }
+		else
+		{
+     mscRet = new NetworkComponent(msc,"MSC", msc, STATUS_TYPE_VALUES[ 0 ]);
+
+                          errorMessage("MSC Find problem: " + msc);
+		}
+            }
+            catch (SQLException e)
+            {
+                log.info("Msg(173) Persistence.getMSCStatus() - an SQLException is thrown"+e);
+            }
+       }
+       else log.info("Msg(174) Persistence.getMSCStatus() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.getMSCStatus() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() );
+        }
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.getMSCStatus() - Connection returned");
+    }
+    return mscRet;
+}
+
+public NetworkComponent getSGSNStatus(String sgsn) throws Exception
+{
+    //check login name and password
+    String sQuery="";
+    ResultSet o_ResultSet=null;
+    PreparedStatement o_Statement=null;
+    NetworkComponent sgsnRet = null;
+    Connection oracleConnection = null;
+
+    try
+    {
+        log.info("Msg(171) Persistence.getSGSNStatus() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.getSGSNStatus() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+
+            //query
+           sQuery="SELECT name, Decode(scs.status, null, 0, scs.status) ";
+           sQuery+=" as status, ccl.no FROM SV_CURRENT_STATUS scs ";
+           sQuery+=", CV_COMPONENT_LOOKUP ccl WHERE ";
+           sQuery+=" scs.cds_id (+) = ccl.name and ccl.no = ? ";
+
+            //run the query
+            try
+            {
+    log.info("Msg(172) Persistence.getSGSNStatus() - Statement Prepared");
+                o_Statement=oracleConnection.prepareStatement(sQuery);
+
+                if(sgsn != null && sgsn.length() != 0)
+                {
+                    o_Statement.setString(1,sgsn);
+                }
+		else
+		{
+
+	           return null;
+
+
+		}
+log.info("Msg(172) Persistence.getSGSNStatus() - Executing " + sQuery);
+                o_ResultSet=o_Statement.executeQuery();
+
+                if (o_ResultSet.next()!=false)
+                {
+                    sgsnRet = new NetworkComponent(o_ResultSet.getString("name"), "SGSN", o_ResultSet.getString("no"), STATUS_TYPE_VALUES[ Integer.parseInt(o_ResultSet.getString("status"))]);
+                }
+		else
+		{
+     sgsnRet = new NetworkComponent(sgsn, "SGSN", sgsn, STATUS_TYPE_VALUES[0]);
+                          errorMessage("SGSN Find problem: " + sgsn);
+		}
+
+            }
+            catch (SQLException e)
+            {
+                log.info("Msg(173) Persistence.getSGSNStatus() - an SQLException is thrown"+e);
+            }
+            }
+        else log.info("Msg(174) Persistence.getSGSNStatus() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() +sQuery);
+        }
+
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+           log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.getSGSNStatus() - Connection returned");
+    }
+    return sgsnRet;
+}
+
+
+//// TJF
+
+    /**
+     * Grab all customer profile details
+     */
+public Vector getCustomerProfile(String customerID) throws Exception 
+{
+    ResultSet o_ResultSet=null;
+    PreparedStatement o_Statement=null;
+    Vector o_elements = new Vector();
+    Connection oracleConnection = null;
+
+    String sQuery = "select ccl.name, ccl.no, ccl.component_type, Decode(status, null, 0, scs.status, scs.status) as status ";
+    sQuery +=       "from cv_component_lookup ccl, ";
+    sQuery +=       "cv_customer_search ccs, sv_current_status scs ";
+    sQuery +=       " where ccs.name = ccl.no and ccl.name = scs.cds_id (+) ";
+    sQuery +=       " and ccs.customer_id = ? ";
+
+    try
+    {
+        log.info("Msg(171) Persistence.getCustomerProfile() - Request for a connection: " + sQuery);
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.getCustomerProfile() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+            //run the query
+	try
+	{
+
+	o_Statement=oracleConnection.prepareStatement(sQuery);
+
+
+              if(customerID != null && customerID.length() != 0)
+              {
+		    try
+		    {
+                        o_Statement.setInt(1, Integer.parseInt(customerID));
+                    }
+		    catch(Exception e)
+		    {
+			log.error("Error converting number: getCustomerProfile " + e.toString());
+		    }
+              }
+	      else
+	      {
+                   log.info("No Customer Id passed");
+		   return null;
+		}
+
+    log.info("Msg(172) Persistence.getCustomerProfile() - Executing ");
+
+			o_ResultSet=o_Statement.executeQuery();
+
+                while (o_ResultSet.next()!=false)
+                {
+         	NetworkComponent tmpProfile = new NetworkComponent(o_ResultSet.getString("name"),o_ResultSet.getString("component_type"), o_ResultSet.getString("no"), STATUS_TYPE_VALUES[ Integer.parseInt(o_ResultSet.getString("status"))]
+	       );
+
+
+                o_elements.add(tmpProfile);
+
+                }
+            }
+            catch (SQLException e)
+            {
+                    log.info("Msg(173) Persistence.getCustomerProfile() - an SQLException is thrown"+e);
+            }
+	    catch (Exception ex)
+	    {
+
+                  log.info("Msg(173a) Persistence.getCustomerProfile() - an SQL Exception is thrown " + ex.toString()); 
+	    }
+        }
+        else log.info("Msg(174) Persistence.getCustomerProfile() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.getCustomerProfile() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() );
+        }
+
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.getCustomerProfile() - Connection returned");
+    }
+    return o_elements;
+
+
+
+
+    }
+
+    /**
+     * Set customer profile element.
+     */
+    public void setCustomerComponents(String customerID, Vector elements) throws Exception {
+
+    ResultSet o_ResultSet=null;
+    PreparedStatement o_Statement=null;
+    PreparedStatement o_Statement1=null;
+    Vector o_elements = new Vector();
+    int custId=0;
+    Connection oracleConnection = null;
+
+    String sQuery = "DELETE FROM cv_customer_search ccs ";
+    sQuery +=       " where customer_id = ? ";
+
+    log.info("Msg(172) Persistence.setCustomerProfile() - SQL: " + sQuery);
+
+    try
+    {
+        log.info("Msg(171) Persistence.setCustomerProfile() - Request for a connection");
+        oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+        log.info("Msg(172) Persistence.setCustomerProfile() - Connection established");
+
+        if(oracleConnection!=null)
+        {
+            //run the query
+	try
+	{
+
+	o_Statement=oracleConnection.prepareStatement(sQuery);
+
+
+              if(customerID != null && customerID.length() != 0)
+              {
+                        custId = Integer.parseInt(customerID);
+                        o_Statement.setInt(1, custId);
+              }
+	      else
+	      {
+                 log.info("No id passed to setCustomerProfile");
+	      }
+
+    log.info("Msg(172) Persistence.setCustomerProfile() - Executing Delete");
+
+			o_Statement.executeQuery();
+
+
+    sQuery = "INSERT INTO cv_customer_search (CUSTOMER_ID, COMPONENT_TYPE, ";
+    sQuery+= "NAME, LAST_CHANGE) VALUES (?,?,?,sysdate)";
+
+    log.info("Msg(172) Persistence.setCustomerProfile() - SQL: " + sQuery);
+
+	o_Statement1=oracleConnection.prepareStatement(sQuery);
+
+		for (int i=0;i<elements.size() ;i++ )
+		{
+
+       	NetworkComponent tmpProfile = (NetworkComponent) elements.get(i); 
+        
+	 o_Statement1.setInt(1, custId);
+	 o_Statement1.setString(2, tmpProfile.getType());
+	 o_Statement1.setString(3, tmpProfile.getName());
+
+    log.info("Msg(172) Persistence.setCustomerProfile() - Executing Insert");
+
+			o_Statement1.executeQuery();
+
+                }
+            }
+            catch (SQLException e)
+            {
+                    log.info("Msg(173) Persistence.setCustomerProfile() - an SQLException is thrown"+e);
+            }
+        }
+        else log.info("Msg(174) Persistence.setCustomerProfile() - Connection null");
+    }
+    catch (SQLException e)
+    {
+        log.info("Msg(175) Persistence.setCustomerProfile() - an SQLException is thrown"+e);
+    }
+    finally
+    {
+        //Close resultset
+        try
+        {
+            if( o_ResultSet != null )
+            {
+                o_ResultSet.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close resultset: " + sqle.getMessage() );
+        }
+
+        //Close statement
+        try
+        {
+            if( o_Statement != null )
+            {
+                o_Statement.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+        try
+        {
+            if( o_Statement1 != null )
+            {
+                o_Statement1.close();
+            }
+        }
+        catch( SQLException sqle )
+        {
+            log.error("Could not close statment: " + sqle.getMessage() );
+        }
+
+        PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+        log.info("Msg(176) Persistence.setCustomerProfile() - Connection returned");
+    }
+
+}
+
+    /**
+     * Returns all 'OSS' network componenets
+     */
+    public Vector getAll_OSS_Elems() throws Exception {
+        // Vector is an array of NetworkComponent
+		return getOSSStatus();
+    }
+
+
+
+public Vector getRelatedCells(String msc, String postcode) throws Exception
+{
+		//check login name and password
+		String sQuery="";
+		ResultSet o_ResultSet=null;
+		PreparedStatement o_Statement=null;
+		Vector returnCells = new Vector();
+		NetworkComponent mscRet = null;
+        Connection oracleConnection = null;
+
+		try
+		{
+		    log.info("Msg(171) Persistence.getRelatedCells() - Request for a connection");
+		    oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+		    log.info("Msg(172) Persistence.getRelatedCells() - Connection established");
+
+			if(oracleConnection!=null)
+			{
+
+				//query
+				sQuery="SELECT DISTINCT sc.location, scs.CELLSITE_REF || ', ' || sc.LOCATION || ', ' ";
+				sQuery+="|| ccl.postcode as cellinfo, sc.STATUS FROM COMP_CELLSITE scs, ";
+				sQuery+="cv_cellsite_lookup ccl, sv_cascade_status sc WHERE ";
+                sQuery+="sc.cds_id = scs.cellsite_ref ";
+                sQuery+="and sc.cds_id = ccl.cellsite_ref (+) ";
+                sQuery+="and scs.msc_id =  ? ";
+                sQuery+="and sc.service_group = 2 ";
+
+              if(postcode != null && postcode.length() != 0)
+              {
+                  sQuery+="and replace(postcode,' ','') like replace('"+postcode+"%', ' ','')";
+              }
+
+                sQuery+=" order by sc.location ASC ";
+
+    log.info("Msg(171a) Persistence.getRelatedCells() - SQL: "+ sQuery);
+
+			//run the query
+			try
+			{
+			o_Statement=oracleConnection.prepareStatement(sQuery);
+
+
+              if(msc != null && msc.length() != 0)
+              {
+                        o_Statement.setString(1, msc);
+              }
+		else
+		{
+    log.info("No MSC value passed for related Cells");
+    return returnCells;
+		}
+
+    log.info("Msg(172) Persistence.getRelatedCells() - Executing ");
+
+			o_ResultSet=o_Statement.executeQuery();
+
+ 			while( o_ResultSet.next()!=false)
+			{
+
+     NetworkComponent tmpCell = new NetworkComponent(o_ResultSet.getString("cellinfo"), "CELLSITE", STATUS_TYPE_VALUES[
+		  Integer.parseInt(o_ResultSet.getString("status"))
+					       ]);
+
+
+                  // Add the Cell information
+                  returnCells.add(tmpCell);
+
+
+					}
+
+				}
+				catch (SQLException e)
+				{
+					log.info("Msg(173) Persistence.getRelatedCells() - an SQLException is thrown"+e);
+				}
+			}
+			else log.info("Msg(174) Persistence.getRelatedCell() - Connection null");
+		}
+		catch (SQLException e)
+		{
+		    log.info("Msg(175) Persistence.getRelatedCells() - an SQLException is thrown"+e);
+		}
+		finally
+		{
+		    //Close resultset
+		    try
+		    {
+		        if( o_ResultSet != null )
+		        {
+		            o_ResultSet.close();
+                }
+
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error("Could not close resultset: " + sqle.getMessage() );
+		    }
+
+		    //Close statement
+		    try
+		    {
+  		        if( o_Statement != null )
+   		        {
+		            o_Statement.close();
+		        }
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error("Could not close statment: " + sqle.getMessage() );
+		    }
+
+			PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+			log.info("Msg(176) Persistence.getRelatedCells() - Connection returned");
+		}
+		return returnCells;
+
+}
+
+
+
+public NetworkComponent getHLRStatus(String hlr) throws Exception
+{
+		//check login name and password
+		String sQuery="";
+		ResultSet o_ResultSet=null;
+		PreparedStatement o_Statement=null;
+		NetworkComponent hlrRet = null;
+        Connection oracleConnection = null;
+
+		try
+		{
+		    log.info("Msg(171) Persistence.getHLRStatus() - Request for a connection");
+		    oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+		    log.info("Msg(172) Persistence.getHLRStatus() - Connection established");
+
+			if(oracleConnection!=null)
+			{
+
+				//query
+				sQuery="SELECT cds_id, status FROM SV_CURRENT_STATUS WHERE cds_id = ? ";
+
+			//run the query
+			try
+			{
+			o_Statement=oracleConnection.prepareStatement(sQuery);
+
+
+              if(hlr != null && hlr.length() != 0)
+              {
+                        o_Statement.setString(1, hlr);
+              }
+
+
+
+
+			o_ResultSet=o_Statement.executeQuery();
+
+ 			if (o_ResultSet.next()!=false)
+			{
+
+     hlrRet = new NetworkComponent(o_ResultSet.getString("cds_id"),"Network",
+			  o_ResultSet.getString("cds_id"),
+                 STATUS_TYPE_VALUES[
+		  Integer.parseInt(o_ResultSet.getString("status"))
+					       ]
+						);
+
+			}
+			else
+			{
+                          errorMessage("Network Find problem: " + hlr);
+			}
+
+
+				}
+				catch (SQLException e)
+				{
+					log.info("Msg(173) Persistence.getHLRStatus() - an SQLException is thrown"+e);
+				}
+			}
+			else log.info("Msg(174) Persistence.getHLRStatus() - Connection null");
+		}
+		catch (SQLException e)
+		{
+		    log.info("Msg(175) Persistence.getHLRStatus() - an SQLException is thrown"+e);
+			log.error("SQLException Error occured in getHLRStatus "+e.getMessage());
+		}
+		finally
+		{
+		    //Close resultset
+		    try
+		    {
+		        if( o_ResultSet != null )
+		        {
+		            o_ResultSet.close();
+                }
+
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error("Could not close resultset: " + sqle.getMessage() );
+		    }
+
+		    //Close statement
+		    try
+		    {
+  		        if( o_Statement != null )
+   		        {
+		            o_Statement.close();
+		        }
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error("Could not close statment: " + sqle.getMessage() );
+		    }
+
+			PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+			log.info("Msg(176) Persistence.getHLRStatus() - Connection returned");
+		}
+		return hlrRet;
+}
+
+public Vector getOSSStatus() throws Exception
+{
+   log.info("Msg(171) Persistence.getOSSStatus() - In Function");
+		//check login name and password
+		String sQuery="";
+		ResultSet o_ResultSet=null;
+		PreparedStatement o_Statement=null;
+                Vector retOss = new Vector();
+                Connection oracleConnection = null;
+
+		try
+		{
+		    log.info("Msg(171) Persistence.getOSSStatus() - Request for a connection");
+		    oracleConnection=PoolConnectionManager.requestConnection(ORACLE_POOL_NAME);
+		    log.info("Msg(172) Persistence.getOSSStatus() - Connection established");
+
+			if(oracleConnection!=null)
+			{
+
+				//query
+				sQuery="SELECT machine FROM cv_oss ";
+
+		    log.info("Msg(172) Persistence.getOSSStatus() - Query: "+sQuery);
+
+			//run the query
+			try
+			{
+	    log.info("Msg(172) Persistence.getOSSStatus() - Prepare");
+			o_Statement=oracleConnection.prepareStatement(sQuery);
+
+	    log.info("Msg(172) Persistence.getOSSStatus() - Execute");
+			o_ResultSet=o_Statement.executeQuery();
+
+ 			while(o_ResultSet.next()!=false)
+				{
+
+      NetworkComponent tmpOss = new NetworkComponent(
+          o_ResultSet.getString("machine"),"OSS", "Available");
+
+                     retOss.add(tmpOss);
+
+					}
+
+				}
+				catch (SQLException e)
+				{
+					log.info("Msg(173) Persistence.getOSSStatus() - an SQLException is thrown"+e);
+				}
+			}
+			else log.info("Msg(174) Persistence.getOSSStatus() - Connection null");
+		}
+		catch (SQLException e)
+		{
+		    log.info("Msg(175) Persistence.getOSSStatus() - an SQLException is thrown"+e);
+		}
+		finally
+		{
+		    //Close resultset
+		    try
+		    {
+		        if( o_ResultSet != null )
+		        {
+		            o_ResultSet.close();
+                }
+
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error( "Could not close resultset: " + sqle.getMessage() );
+		    }
+
+		    //Close statement
+		    try
+		    {
+  		        if( o_Statement != null )
+   		        {
+		            o_Statement.close();
+		        }
+		    }
+		    catch( SQLException sqle )
+		    {
+		        log.error( "Could not close statment: " + sqle.getMessage() );
+		    }
+
+			PoolConnectionManager.returnConnection(ORACLE_POOL_NAME,oracleConnection);
+			log.info("Msg(176) Persistence.getOSSStatus() - Connection returned");
+		}
+		return retOss;
+
+}
+
+/******* EOF *********/
+/* Class Closure ... */
+}

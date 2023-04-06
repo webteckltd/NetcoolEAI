@@ -1,0 +1,19 @@
+package com.o2.manonsite.SocketProbe;
+
+
+public class SocketProbeException extends java.lang.Exception
+{
+	public SocketProbeException()
+	{
+	}
+
+	public SocketProbeException(String s)
+	{
+		super(s);
+	}
+
+	public SocketProbeException(Throwable throwable)
+	{
+		super(throwable);
+	}
+}

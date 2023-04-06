@@ -1,0 +1,83 @@
+/* Modification  History :
+* Date          Version  Modified by     Brief Description of Modification
+* 				 1.0					 Base version
+* 29-Oct-2010	 1.1	   KEANE		 Modified for DR 1434978                                                                                              
+*/
+package com.o2.osiris.troubleticket;
+
+import org.apache.log4j.Logger;
+
+import com.o2.osiris.Osiris;
+import com.o2.osiris.util.WorkQueue;
+
+public class DummyTroubleTicketManager implements TroubleTicketManager
+{
+	private static Logger log = Logger.getLogger(DummyTroubleTicketManager.class);
+
+	private WorkQueue newTTList = new WorkQueue();
+	private WorkQueue upTTList = new WorkQueue();
+	
+	public WorkQueue getCreateLinkList()
+	{
+		log.warn(newTTList.size() + " events in List");
+		return newTTList;
+	}
+	
+	public WorkQueue getUpdateLinkList()
+	{
+		log.warn(upTTList.size() + " events in List");
+		return upTTList;
+	}
+	public DummyTroubleTicketManager()
+	{
+		log.info("DummyTroubleTicketManager()");
+	}
+
+	public void init(Osiris server) throws TroubleTicketException
+	{
+	    log.info("init");
+	}
+	
+	public void initPlannedOutages() throws TroubleTicketException
+	{
+	    log.info("initPlannedOutages");	    
+	}
+
+	public void initRecalc() throws TroubleTicketException
+	{
+	    log.info("initRecalc");	    
+	}
+
+	
+	public 
+	void 
+	createTroubleTicket(
+		TroubleTicket troubleTicket
+	) throws TroubleTicketException
+	{
+	    log.info("createTroubleTicket"); 
+	}
+
+	// Start of Change for OSC 1434978
+    // Changed the return variable as boolean 
+	public boolean updateTroubleTicket(TroubleTicket troubleTicket)
+			throws TroubleTicketException {
+    // End of Change for OSC 1434978
+	    log.info("updateTroubleTicket");
+    // Start of Change for OSC 1434978
+		return false; 
+    // End of Change for OSC 1434978
+	}
+	
+	
+	public void shutdown() {
+	    
+	}
+	//Added for DR-1616094
+	public boolean updateTroubleTicketTitle(TroubleTicket troubleTicket) throws TroubleTicketException {
+		// TODO Auto-generated method stub
+		return false;
+	}
+	//End of Addition for DR-1616094
+ 		
+}
